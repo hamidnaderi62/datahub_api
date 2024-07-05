@@ -1,0 +1,6 @@
+# TokenAuthentication API Call
+Authorization : Token my_token
+
+# JWTAuthentication API Call
+Authorization : Bearer access_token
+# After access_token expire, we should send (post) refresh_token to get new access_token from server

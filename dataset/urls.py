@@ -21,12 +21,23 @@ urlpatterns = [
     path('datasets/add', views.AddDatasetView.as_view()),
     path('datasets/update/<int:pk>', views.UpdateDatasetView.as_view()),
     path('datasets/delete/<int:pk>', views.DeleteDatasetView.as_view()),
+    path('datasets/search', views.SearchDatasetView.as_view()),
     path('datasets/checktoken', views.CheckToken.as_view()),
+
+    # DownloadScheduler
+    path('DatasetDownloadScheduler', views.DownloadSchedulerView.as_view()),
+
+    # DataConvertor
+    path('convertToParquet', views.DataConvertorView.as_view()),
+
+    # GenerateMetaData
+    path('GenerateMetaData', views.GenerateMetaData.as_view()),
 
     # HuggingFace
     path('HuggingfaceDatasetsList', views.HuggingfaceDatasetsListView.as_view()),
     path('HuggingfaceDatasetDetail', views.HuggingfaceDatasetDetailView.as_view()),
     path('ImportHuggingface', views.ImportHuggingfaceView.as_view()),
+    path('BulkImportHuggingface', views.BulkImportHuggingfaceView.as_view()),
 
     # Kaggle
     path('KaggleDatasetsList', views.KaggleDatasetsListView.as_view()),

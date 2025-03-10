@@ -47,11 +47,14 @@ class DatasetSerializer(serializers.ModelSerializer):
     # days_ago = serializers.SerializerMethodField()
     # persian_date = serializers.SerializerMethodField()
     comments = serializers.SerializerMethodField()
-    user = serializers.SlugRelatedField(read_only=True, slug_field="username")
+    # user = serializers.SlugRelatedField(read_only=True, slug_field="username")
+    user = serializers.ReadOnlyField(source='user.username')
     image = serializers.SerializerMethodField()
     class Meta:
         model = Dataset
         fields = "__all__"
+        read_only_fields = ('id', 'created')
+        extra_kwargs = {'image': {'required': False}}
         # fields = ("id", "preterm_delivery", "days_ago", "persian_date", "user", "comments")
         # read_only_fields = ['preterm_delivery']
         # exclude = ("preterm_delivery",)

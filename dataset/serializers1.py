@@ -1,11 +1,9 @@
 from rest_framework import serializers
 from django.utils.timezone import now
 from persiantools.jdatetime import JalaliDate
-from .models import Dataset, InternationalDataset, Comment, User
+from .models import Dataset, Comment, User
 
-##################################################
-# User
-##################################################
+
 class UserSerializer(serializers.Serializer):
     username = serializers.CharField(max_length=100)
     email = serializers.EmailField(max_length=100)
@@ -29,31 +27,21 @@ class UserDetailSerializer(serializers.ModelSerializer):
         model = User
         fields = "__all__"
 
-
-##################################################
-# InternationalDataset
-##################################################
-class InternationalDatasetSerializer(serializers.ModelSerializer):
-    code = serializers.CharField(read_only=True)
-    user = serializers.ReadOnlyField(source='user.username')
-    image = serializers.SerializerMethodField()
-    class Meta:
-        model = InternationalDataset
-        fields = "__all__"
-        read_only_fields = ('id', 'created')
-        extra_kwargs = {'image': {'required': False}}
+'''
+class PretermSerializer(serializers.Serializer):
+    id = serializers.IntegerField(required=False)
+    diabetes_in_pregnancy = serializers.CharField(max_length=10)
+    newborn_under_2500g = serializers.CharField(max_length=10)
+    abnormalBaby = serializers.CharField(max_length=10)
+    multiple_births = serializers.CharField(max_length=10)
+    preterm_delivery = serializers.CharField(max_length=10, required=False)
 
     def create(self, validated_data):
-        # request = self.context.get('request')
-        # validated_data['user'] = request.user
-        # return InternationalDataset.objects.create(**validated_data)
-        instance, created = InternationalDataset.objects.update_or_create(internalId=validated_data['internalId'], defaults=validated_data)
-        return instance
+        return Preterm.objects.create(**validated_data)
+        # return Preterm.objects.create(diabetes_in_pregnancy=validated_data['diabetes_in_pregnancy'])
+'''
 
 
-##################################################
-# Dataset
-##################################################
 class DatasetSerializer(serializers.ModelSerializer):
     code = serializers.CharField(read_only=True)
     # days_ago = serializers.SerializerMethodField()
@@ -71,7 +59,13 @@ class DatasetSerializer(serializers.ModelSerializer):
         # read_only_fields = ['preterm_delivery']
         # exclude = ("preterm_delivery",)
 
-# Object based validation
+    # Field based validation
+    # def validate_diabetes_in_pregnancy(self, value):
+    #     if value != "1" and value != "0":
+    #         raise serializers.ValidationError("Your input is not valid")
+    #     return value
+
+    # Object based validation
 #    def validate(self, attrs):
 #        if attrs['name'] == "1" and attrs['owner'] == "0":
 #            raise serializers.ValidationError("Your input is not valid")
@@ -100,18 +94,15 @@ class DatasetSerializer(serializers.ModelSerializer):
             return request.build_absolute_uri(image_url)
         return None
 
-class UserFullDetailSerializer(serializers.ModelSerializer):
-    datasets = DatasetSerializer(many=True)
-    class Meta:
-        model = User
-        fields = "__all__"
 
-##################################################
-# Comment
-##################################################
 class CommentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Comment
         fields = "__all__"
 
 
+class UserFullDetailSerializer(serializers.ModelSerializer):
+    datasets = DatasetSerializer(many=True)
+    class Meta:
+        model = User
+        fields = "__all__"

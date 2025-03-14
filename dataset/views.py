@@ -9,7 +9,7 @@ from rest_framework import status
 from rest_framework.authentication import TokenAuthentication
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from django.contrib.auth.models import User
-from .serializers import UserSerializer, UserDetailSerializer, UserFullDetailSerializer, DatasetSerializer, CommentSerializer
+from .serializers import UserSerializer, UserDetailSerializer, UserFullDetailSerializer, DatasetSerializer,InternationalDatasetSerializer, CommentSerializer
 from .models import Dataset, Comment
 from .permissions import BlocklistPermission, IsOwnerOrReadOnly
 from rest_framework.viewsets import ViewSet, ModelViewSet
@@ -18,37 +18,15 @@ from rest_framework.parsers import MultiPartParser
 import pandas as pd
 import os
 from django.conf import settings
-
+import kaggle
+import json
+import os
 
 class StandardResultsSetPagination(PageNumberPagination):
     page_size = 1
     page_size_query_param = 'page_size'
     max_page_size = 50
 
-
-@api_view(['GET', 'POST'])
-def hello_world(request):
-    data = request.data
-    return Response({"message": f"{data['fname']}  {data.get('lname')}"})
-
-
-class HelloWorld(APIView):
-    def get(self, request):
-        return Response({"message": "Hi get"})
-    def post(self, request):
-        return Response({"message": "Hi post"})
-
-
-class CryptoPriceListView(APIView):
-    def get(self, request):
-        coin = request.GET.get('coin')
-        response = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={coin.upper()}")
-        data = response.json()
-        result = {
-            "symbol": data['symbol'],
-            "price": data['price']
-        }
-        return Response(data=result)
 
 ##################################################
 # Huggingface
@@ -88,18 +66,18 @@ class ImportHuggingfaceView(APIView):
             "internalId": data[0]['_id'],
             "internalCode": data[0]['id'],
             #"recordsNum": data[0]['symbol'],
-            "size": data[0]['cardData']['dataset_info']['dataset_size'],
+            #"size": data[0]['cardData']['dataset_info']['dataset_size'],
             #"format": data[0]['symbol'],
             "language": data[0]['cardData']['language'][0],
             "desc": data[0]['description'],
             "license": data[0]['cardData']['license'][0],
             "tasks": data[0]['cardData']['task_categories'][0],
             "datasetDate": data[0]['createdAt'],
-            "columnDataType": data[0]['cardData']['dataset_info']['features'],
+            #"columnDataType": data[0]['cardData']['dataset_info']['features'],
             "sourceJson": data[0],
         }
         print(result)
-        ser = DatasetSerializer(data=result, context={'request': request})
+        ser = InternationalDatasetSerializer(data=result, context={'request': request})
         if ser.is_valid():
             ser.validated_data['user'] = request.user
             instance = ser.save()
@@ -108,46 +86,128 @@ class ImportHuggingfaceView(APIView):
 
 
 class BulkImportHuggingfaceView(APIView):
-    #permission_classes = [IsAuthenticated, BlocklistPermission]
-    # permission_classes = [IsAdminUser]
+    permission_classes = [IsAuthenticated, BlocklistPermission]
+
     def post(self, request):
-        res = requests.get(f"https://huggingface.co/api/datasets?full=full&limit=100")
+        res = requests.get("https://huggingface.co/api/datasets?full=full&limit=1000")
         dataList = res.json()
         num_added_records = 0
 
         for data in dataList:
-            dataset_info = data['cardData']['dataset_info']
+            try:
+                card_data = data.get('cardData', {})
+                dataset_info = card_data.get('dataset_info', {})
 
-            result = {
-                #"code": data['symbol'],
-                "name": data['id'],
-                "owner": data['author'],
-                "internalId": data['_id'],
-                "internalCode": data['id'],
-                #"recordsNum": data['symbol'],
-                "size": dataset_info[0]['dataset_size'] if isinstance(dataset_info, list) else dataset_info['dataset_size'],
-                #"format": data['symbol'],
-                "language": data['cardData']['language'],
-                "desc": data['description'],
-                "license": data['cardData']['license'][0],
-                "tasks": data['cardData']['task_categories'][0],
-                "datasetDate": data['createdAt'],
-                "columnDataType": dataset_info[0]['features'] if isinstance(dataset_info, list) else dataset_info['features'],
-                "sourceJson": data,
-            }
+                # If dataset_info is a list, take the first item
+                if isinstance(dataset_info, list) and dataset_info:
+                    dataset_info = dataset_info[0]
 
-            ser = DatasetSerializer(data=result, context={'request': request})
-            if ser.is_valid():
-                ser.validated_data['user'] = request.user
-                instance = ser.save()
-                num_added_records = num_added_records + 1
+                # Extract language and ensure it's a string
+                language = card_data.get('language')
+                if isinstance(language, list):
+                    language = ", ".join(language)  # Convert list to comma-separated string
+
+                result = {
+                    "name": data.get('id'),
+                    "owner": data.get('author'),
+                    "internalId": data.get('_id'),
+                    "internalCode": data.get('id'),
+                    "language": language,  # Ensures it's a string or None
+                    "desc": data.get('description'),
+                    "license": card_data.get('license', [None])[0],  # Avoid IndexError
+                    "tasks": card_data.get('task_categories', [None])[0],
+                    "datasetDate": data.get('createdAt'),
+                    "size": dataset_info.get('dataset_size'),
+                    "columnDataType": dataset_info.get('features'),
+                    "sourceJson": data,
+                }
+
+                # Serialize and validate data
+                ser = InternationalDatasetSerializer(data=result, context={'request': request})
+                if ser.is_valid():
+                    ser.validated_data['user'] = request.user  # Set user before saving
+                    ser.save()
+                    num_added_records += 1
+                else:
+                    print(f"Validation error: {ser.errors}")  # Debugging step
+
+            except Exception as e:
+                print(f"Error processing dataset {data.get('id', 'Unknown')}: {e}")
 
         return Response({"response": f"{num_added_records} Records Added"}, status=status.HTTP_201_CREATED)
-
 ##################################################
 # Kaggle
 ##################################################
-class KaggleDatasetsListView(APIView):
+
+class KaggleDatasetDetailView1(APIView):
+    def get(self, request):
+        dataset_ref = request.GET.get('dataset_ref')
+        try:
+            # Load Kaggle credentials from JSON
+            kaggle_config_path = 'config/kaggle.json'
+            if not os.path.exists(kaggle_config_path):
+                return Response({"error": "Kaggle credentials file not found"}, status=status.HTTP_400_BAD_REQUEST)
+
+            with open(kaggle_config_path) as f:
+                kaggle_auth = json.load(f)
+
+            # Set Kaggle API credentials
+            os.environ['KAGGLE_USERNAME'] = kaggle_auth.get('username', '')
+            os.environ['KAGGLE_KEY'] = kaggle_auth.get('key', '')
+
+            # Authenticate and get datasets
+            kaggle.api.authenticate()
+            dataset = kaggle.api.dataset_metadata(dataset_ref)
+
+            return Response({"dataset": dataset}, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class KaggleDatasetDetailView(APIView):
+    def get(self, request):
+        dataset_ref = request.GET.get('dataset_ref')
+
+        if not dataset_ref:
+            return Response({"error": "dataset_ref parameter is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            kaggle_config_path = 'config/kaggle.json'
+            if not os.path.exists(kaggle_config_path):
+                return Response({"error": "Kaggle credentials file not found"}, status=status.HTTP_400_BAD_REQUEST)
+
+            with open(kaggle_config_path) as f:
+                kaggle_auth = json.load(f)
+
+            # Set Kaggle API credentials
+            os.environ['KAGGLE_USERNAME'] = kaggle_auth.get('username', '')
+            os.environ['KAGGLE_KEY'] = kaggle_auth.get('key', '')
+
+            # Initialize and authenticate Kaggle API
+            api = kaggle.KaggleApi()
+            api.authenticate()
+            dataset = api.dataset_metadata(dataset_ref)
+
+            # Convert dataset object to dictionary
+            dataset_info = {
+                "title": dataset.title,
+                "owner": dataset.creatorName,
+                "ref": dataset.ref,
+                "size": dataset.size,
+                "license": dataset.licenseName,
+                "totalViews": dataset.totalViews,
+                "totalDownloads": dataset.totalDownloads,
+                "usabilityRating": dataset.usabilityRating,
+                "tags": dataset.tags,
+                "fileTypes": dataset.fileTypes,
+                "url": f"https://www.kaggle.com/datasets/{dataset_ref}"
+            }
+            return Response({"dataset": dataset_info}, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({"error": f"Unexpected error: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class KaggleDatasetsListView1(APIView):
     def get(self, request):
         import kaggle
         from kaggle.api.kaggle_api_extended import KaggleApi
@@ -162,7 +222,7 @@ class KaggleDatasetsListView(APIView):
         return Response(data=result)
 
 
-class KaggleDatasetsListView1(APIView):
+class KaggleDatasetsListView2(APIView):
     def get(self, request):
         import json
         import os
@@ -179,6 +239,76 @@ class KaggleDatasetsListView1(APIView):
         response = kaggle.api.dataset_list_cli()
         # response = requests.get(f"https://huggingface.co/api/datasets")
         data = response
+        result = {
+            "data": data
+        }
+        return Response(data=result)
+
+
+class KaggleDatasetsListView(APIView):
+    def get(self, request):
+        try:
+            # Load Kaggle credentials from JSON
+            kaggle_config_path = 'config/kaggle.json'
+            if not os.path.exists(kaggle_config_path):
+                return Response({"error": "Kaggle credentials file not found"}, status=status.HTTP_400_BAD_REQUEST)
+
+            with open(kaggle_config_path) as f:
+                kaggle_auth = json.load(f)
+
+            # Set Kaggle API credentials
+            os.environ['KAGGLE_USERNAME'] = kaggle_auth.get('username', '')
+            os.environ['KAGGLE_KEY'] = kaggle_auth.get('key', '')
+
+            # Authenticate and get datasets
+            kaggle.api.authenticate()
+            datasets = kaggle.api.dataset_list()
+
+            # Convert dataset objects to a dictionary format
+            data = [{"title": d.title, "size": d.size, "ref": d.ref, "url": d.url, "lastUpdated": d.lastUpdated} for d in datasets]
+
+            return Response({"datasets": datasets}, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class KaggleDatasetsListView3(APIView):
+    def get(self, request):
+        try:
+            # Load Kaggle credentials from JSON
+            kaggle_config_path = 'config/kaggle.json'
+            if not os.path.exists(kaggle_config_path):
+                return Response({"error": "Kaggle credentials file not found"},
+                                status=status.HTTP_400_BAD_REQUEST)
+
+            with open(kaggle_config_path) as f:
+                kaggle_auth = json.load(f)
+
+            # Set Kaggle API credentials
+            os.environ['KAGGLE_USERNAME'] = kaggle_auth.get('username', '')
+            os.environ['KAGGLE_KEY'] = kaggle_auth.get('key', '')
+
+            # Authenticate and get datasets
+            kaggle.api.authenticate()
+
+            response = requests.get(f"https://www.kaggle.com/api/v1/datasets/list?group=public&sortby=hottest&size=all&filetype=all&license=all&viewed=unspecified&page=1")
+
+
+
+            return Response({"response": response}, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+##################################################
+# PaperWithCode
+##################################################
+
+class PaperWithCodeDatasetsListView(APIView):
+    def get(self, request):
+        response = requests.get(f"https://paperswithcode.com/api/v1/datasets/?page=150&items_per_page=50")
+        data = response.json()
         result = {
             "data": data
         }
@@ -224,6 +354,8 @@ class CheckToken(APIView):
     def get(self, request):
         user = request.user
         return Response({"user": user.username}, status=status.HTTP_200_OK)
+
+
 ##################################################
 # Datasets
 ##################################################
@@ -311,43 +443,6 @@ class CommentsListView(APIView):
         comments = Dataset.objects.get(id=pk).comments.all()
         serializer = CommentSerializer(instance=comments, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
-
-
-# ViewSet
-'''
-class PretermViewSet(ViewSet):
-    permission_classes = [IsAuthenticated]
-    def list(self, request):
-        queryset = Preterm.objects.all()
-        serializer = PretermSerializer(instance=queryset, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
-
-    def retrieve(self, request, pk=None):
-        instance = Preterm.objects.get(id=pk)
-        serializer = PretermSerializer(instance=instance)
-        return Response(serializer.data, status=status.HTTP_200_OK)
-
-    def create(self, request):
-        ser = PretermSerializer(data=request.data, context={'request': request})
-        if ser.is_valid():
-            ser.validated_data['user'] = request.user
-            instance = ser.save()
-            return Response({"response": "Added"}, status=status.HTTP_201_CREATED)
-        return Response(ser.errors, status=400)
-
-    def update(self, request, pk=None):
-        instance = Preterm.objects.get(id=pk)
-        self.check_object_permissions(request, instance)
-        ser = PretermSerializer(instance=instance, data=request.data, partial=True)
-        if ser.is_valid():
-            instance = ser.save()
-            return Response({"response": "Updated"})
-        return Response(ser.errors)
-'''
-
-class DatasetViewSet(ModelViewSet):
-    queryset = Dataset.objects.all()
-    serializer_class = DatasetSerializer
 
 
 

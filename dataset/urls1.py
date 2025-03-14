@@ -7,6 +7,9 @@ from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from rest_framework.routers import DefaultRouter
 
 urlpatterns = [
+    path('dataset', views.hello_world),
+    path('dataset/cbv', views.HelloWorld.as_view()),
+    path('crypto', views.CryptoPriceListView.as_view()),
     path('users', views.UsersListView.as_view()),
     path('users_detail', views.UsersListDetailView.as_view()),
     path('users_fulldetail', views.UsersListFullDetailView.as_view()),
@@ -38,10 +41,6 @@ urlpatterns = [
 
     # Kaggle
     path('KaggleDatasetsList', views.KaggleDatasetsListView.as_view()),
-    path('KaggleDatasetDetail', views.KaggleDatasetDetailView.as_view()),
-
-    # PaperWithCode
-    path('PaperWithCodeDatasetsList', views.PaperWithCodeDatasetsListView.as_view()),
 
     # TokenAuthentication
     # path('preterms/login', token_views.obtain_auth_token),
@@ -53,3 +52,7 @@ urlpatterns = [
     path('comments/<int:pk>', views.CommentsListView.as_view()),
 ]
 
+
+router = DefaultRouter()
+router.register(r'datasets/viewset', views.DatasetViewSet, basename='datasets')
+urlpatterns += router.urls

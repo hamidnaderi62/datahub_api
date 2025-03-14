@@ -3,6 +3,7 @@ from . import models
 
 
 admin.site.register(models.Dataset)
+admin.site.register(models.InternationalDataset)
 admin.site.register(models.Comment)
 admin.site.register(models.BlockUser)
 

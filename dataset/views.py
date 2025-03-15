@@ -455,19 +455,33 @@ import datetime as dt
 from scheduler import Scheduler
 from scheduler.trigger import Monday, Tuesday
 
+from rest_framework.response import Response
+from rest_framework.views import APIView
+from apscheduler.schedulers.background import BackgroundScheduler
+import datetime as dt
+#  pip install apscheduler
 class DownloadSchedulerView(APIView):
 
-    def foo():
+    def foo1():
         print("foo")
 
-    def get(self, request):
+    def get1(self, request):
         #repo_id = request.GET.get('repo_id')
         schedule = Scheduler()
-        # schedule.cyclic(dt.timedelta(seconds=5), self.foo)
-        schedule.cyclic(dt.timedelta(seconds=5), print('oook'))
+        schedule.cyclic(dt.timedelta(seconds=5), self.foo)
+        # schedule.cyclic(dt.timedelta(seconds=5), print('oook'))
         return Response({"response": "schedule finish"})
 
 
+    def foo(self):
+        print("foo")
+
+    def get(self, request):
+        scheduler = BackgroundScheduler()
+        scheduler.add_job(self.foo, 'interval', seconds=5)  # Run every 5 seconds
+        scheduler.start()
+
+        return Response({"response": "schedule started"})
 
 ##################################################
 # DataConvertor

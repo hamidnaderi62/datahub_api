@@ -15,8 +15,7 @@ from .permissions import BlocklistPermission, IsOwnerOrReadOnly
 from rest_framework.viewsets import ViewSet, ModelViewSet
 from rest_framework.pagination import PageNumberPagination, LimitOffsetPagination
 from rest_framework.parsers import MultiPartParser
-import pandas as pd
-import os
+from apscheduler.schedulers.background import BackgroundScheduler
 from django.conf import settings
 import kaggle
 import json
@@ -34,7 +33,9 @@ class StandardResultsSetPagination(PageNumberPagination):
 
 class HuggingfaceDatasetsListView(APIView):
     def get(self, request):
-        response = requests.get(f"https://huggingface.co/api/datasets?full=full&limit=30")
+        page = request.GET.get('page')
+        limit = request.GET.get('limit')
+        response = requests.get(f"https://huggingface.co/api/datasets?full=full&page={page}&limit={limit}")
         data = response.json()
         result = {
             "data": data
@@ -89,7 +90,9 @@ class BulkImportHuggingfaceView(APIView):
     permission_classes = [IsAuthenticated, BlocklistPermission]
 
     def post(self, request):
-        res = requests.get("https://huggingface.co/api/datasets?full=full&limit=1000")
+        page = 2
+        limit = 5000
+        res = requests.get(f"https://huggingface.co/api/datasets?full=full&limit=5000")
         dataList = res.json()
         num_added_records = 0
 
@@ -118,7 +121,12 @@ class BulkImportHuggingfaceView(APIView):
                     "tasks": card_data.get('task_categories', [None])[0],
                     "datasetDate": data.get('createdAt'),
                     "size": dataset_info.get('dataset_size'),
+                    "format":  next((tag.split(":")[1] for tag in data.get('tags') if tag.startswith("format:")), None),
+                    "dataType": next((tag.split(":")[1] for tag in data.get('tags') if tag.startswith("modality:")), None),
                     "columnDataType": dataset_info.get('features'),
+                    "dataset_tags": ', '.join(card_data.get('tags')) + ', ' + ', '.join(card_data.get('task_categories')),
+                    "likes": data.get('likes'),
+                    "downloads": data.get('downloads'),
                     "sourceJson": data,
                 }
 
@@ -449,30 +457,8 @@ class CommentsListView(APIView):
 ##################################################
 # DownloadScheduler
 ##################################################
-# pip install scheduler
-
-import datetime as dt
-from scheduler import Scheduler
-from scheduler.trigger import Monday, Tuesday
-
-from rest_framework.response import Response
-from rest_framework.views import APIView
-from apscheduler.schedulers.background import BackgroundScheduler
-import datetime as dt
 #  pip install apscheduler
 class DownloadSchedulerView(APIView):
-
-    def foo1():
-        print("foo")
-
-    def get1(self, request):
-        #repo_id = request.GET.get('repo_id')
-        schedule = Scheduler()
-        schedule.cyclic(dt.timedelta(seconds=5), self.foo)
-        # schedule.cyclic(dt.timedelta(seconds=5), print('oook'))
-        return Response({"response": "schedule finish"})
-
-
     def foo(self):
         print("foo")
 

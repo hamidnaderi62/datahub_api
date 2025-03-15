@@ -32,7 +32,7 @@ class InternationalDataset(models.Model):
     internalCode = models.CharField(max_length=300, blank=True, null=True)
     recordsNum = models.CharField(max_length=10, blank=True, null=True)
     size = models.CharField(max_length=30, blank=True, null=True)
-    format = models.CharField(max_length=30, blank=True, null=True)
+    format = models.CharField(max_length=100, blank=True, null=True)
     language = models.CharField(max_length=30, blank=True, null=True)
     desc = models.TextField(blank=True, null=True)
     license = models.CharField(max_length=100, blank=True, null=True)
@@ -49,7 +49,8 @@ class InternationalDataset(models.Model):
     datasetRate = models.FloatField(blank=True, null=True)
     dataType = models.CharField(max_length=50, choices=DATA_TYPE, default='Text', blank=True, null=True)
     dataset_tags = models.TextField(blank=True, null=True)
-    likes = models.ManyToManyField(User, related_name='likes', blank=True, null=True)
+    likes = models.IntegerField(blank=True, null=True)
+    downloads = models.IntegerField(blank=True, null=True)
     created = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

@@ -24,6 +24,14 @@ class InternationalDataset(models.Model):
         ('GeoData', 'GeoData')
     )
 
+    DATASET_STATUS = (
+        ('Initialized', 'Initialized'),
+        ('Download_Progress', 'Download_Progress'),
+        ('Download_Failed', 'Download_Failed'),
+        ('Download_Completed', 'Download_Completed'),
+        ('Transfer', 'Transfer')
+    )
+
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='international_datasets', blank=True, null=True)
     code = models.CharField(max_length=100, blank=True, null=True)
     name = models.CharField(max_length=1000, blank=True, null=True)
@@ -41,16 +49,17 @@ class InternationalDataset(models.Model):
     columnDataType = models.JSONField(blank=True, null=True)
     sourceJson = models.JSONField(blank=True, null=True)
     image = models.ImageField(upload_to='images', blank=True, null=True)
+    refDownloadLink = models.JSONField(blank=True, null=True)
     downloadLink = models.JSONField(blank=True, null=True)
     price = models.FloatField(blank=True, null=True)
-    downloadCount = models.IntegerField(blank=True, null=True)
     createType = models.CharField(max_length=50, choices=CREATE_TYPE, default='Transfer', blank=True, null=True)
     referenceOwner = models.CharField(max_length=500, blank=True, null=True)
     datasetRate = models.FloatField(blank=True, null=True)
-    dataType = models.CharField(max_length=50, choices=DATA_TYPE, default='Text', blank=True, null=True)
+    dataType = models.CharField(max_length=50, blank=True, null=True)
     dataset_tags = models.TextField(blank=True, null=True)
     likes = models.IntegerField(blank=True, null=True)
     downloads = models.IntegerField(blank=True, null=True)
+    dataset_status = models.CharField(max_length=200, choices=DATASET_STATUS, default='Initialized', blank=True, null=True)
     created = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

@@ -33,6 +33,7 @@ urlpatterns = [
     # HuggingFace
     path('HuggingfaceDatasetsList', views.HuggingfaceDatasetsListView.as_view()),
     path('HuggingfaceDatasetDetail', views.HuggingfaceDatasetDetailView.as_view()),
+    path('HuggingfaceParquetFiles', views.HuggingfaceParquetFilesView.as_view()),
     path('ImportHuggingface', views.ImportHuggingfaceView.as_view()),
     path('BulkImportHuggingface', views.BulkImportHuggingfaceView.as_view()),
 

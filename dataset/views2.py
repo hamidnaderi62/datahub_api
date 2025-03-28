@@ -11,7 +11,7 @@ from rest_framework.authentication import TokenAuthentication
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from django.contrib.auth.models import User
 from .serializers import UserSerializer, UserDetailSerializer, UserFullDetailSerializer, DatasetSerializer,InternationalDatasetSerializer, CommentSerializer
-from .models import Dataset, InternationalDataset, Comment
+from .models import Dataset, Comment
 from .permissions import BlocklistPermission, IsOwnerOrReadOnly
 from rest_framework.viewsets import ViewSet, ModelViewSet
 from rest_framework.pagination import PageNumberPagination, LimitOffsetPagination
@@ -24,24 +24,12 @@ import os
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
 import hashlib
-import asyncio
-import aiohttp
-from asgiref.sync import sync_to_async
+
 
 class StandardResultsSetPagination(PageNumberPagination):
     page_size = 1
     page_size_query_param = 'page_size'
     max_page_size = 50
-
-
-##################################################
-# General
-##################################################
-
-# Transfer downloaded dataset from InternationalDataset to Dataset table
-# class TransferDatasetView(APIView):
-
-
 
 
 ##################################################
@@ -70,7 +58,7 @@ class HuggingfaceDatasetDetailView(APIView):
         }
         return Response(data=result)
 
-# class for download files
+
 class HuggingfaceParquetFilesView1(APIView):
     def get(self, request):
         repo_id = request.GET.get('repo_id')
@@ -80,320 +68,119 @@ class HuggingfaceParquetFilesView1(APIView):
         return Response(data=result)
 
 
-
-# Async class for download files
 class HuggingfaceParquetFilesView(APIView):
 
-    async def fetch_and_save(self, session, url, file_path):
-        """Asynchronously download and save a file."""
-        try:
-            async with session.get(url) as response:
-                if response.status != 200:
-                    return {"error": f"Failed to download {url}"}
-                # Save file asynchronously
-                content = await response.read()
-                default_storage.save(file_path, ContentFile(content))
-                return {"success": file_path}
-        except Exception as e:
-            return {"error": f"Exception while downloading {url}: {str(e)}"}
-
-    async def download_files(self, json_data, repo_id):
-        """Handles multiple concurrent downloads."""
-        tasks = []
-        downloaded_files = {}
-        async with aiohttp.ClientSession() as session:
-            for dataset, categories in json_data.items():
-                downloaded_files[dataset] = {}
-                for category, urls in categories.items():
-                    downloaded_files[dataset][category] = []
-                    for url in urls:
-                        # Generate a hashed filename
-                        file_name = os.path.basename(url)
-                        hashed_name = hashlib.sha256(f"{repo_id}".encode()).hexdigest()[:16]  # Use first 16 chars
-                        file_path = f"downloads/{hashed_name}/{dataset}_{category}_{file_name}"
-                        # Ensure directories exist
-                        os.makedirs(os.path.dirname(default_storage.path(file_path)), exist_ok=True)
-                        # Schedule async download
-                        task = self.fetch_and_save(session, url, file_path)
-                        tasks.append(task)
-                        downloaded_files[dataset][category].append(file_path)
-            # Run tasks concurrently
-            results = await asyncio.gather(*tasks)
-            # Check for errors in results
-            for result in results:
-                if "error" in result:
-                    return JsonResponse(result, status=500)
-        return downloaded_files
-
-
-
-    async def update_database(self, repo_id, dataset_status, download_links):
-        try:
-            dataset = await sync_to_async(InternationalDataset.objects.get)(name=repo_id)
-            dataset.dataset_status = dataset_status
-            dataset.downloadLink = download_links
-            await sync_to_async(dataset.save)()
-        except InternationalDataset.DoesNotExist:
-            return {"error": f"Repo with repo_id {repo_id} not found in the database."}
-
-    async def get(self, request):
-        """Handles GET requests asynchronously."""
+    def get1(self, request):
         repo_id = request.GET.get("repo_id")
         if not repo_id:
             return JsonResponse({"error": "Missing repo_id parameter"}, status=400)
+
         try:
             # Fetch JSON data from Hugging Face API
-            async with aiohttp.ClientSession() as session:
-                async with session.get(f"https://huggingface.co/api/datasets/{repo_id}/parquet") as response:
-                    if response.status != 200:
-                        return JsonResponse(
-                            {"error": f"Failed to fetch data from Hugging Face. Status: {response.status}"},
-                            status=response.status)
-                    json_data = await response.json()
+            response = requests.get(f"https://huggingface.co/api/datasets/{repo_id}/parquet")
+
+            if response.status_code != 200:
+                return JsonResponse(
+                    {"error": f"Failed to fetch data from Hugging Face. Status: {response.status_code}"},
+                    status=response.status_code)
+
+            json_data = response.json()
+
             if not isinstance(json_data, dict):
                 return JsonResponse({"error": "Invalid JSON format received from Hugging Face"}, status=400)
-            # Download files asynchronously
-            downloaded_files = await self.download_files(json_data, repo_id)
-            update_res = await self.update_database(repo_id, 'Download_Completed', downloaded_files)
+
+            downloaded_files = {}
+
+            for dataset, categories in json_data.items():
+                if not isinstance(categories, dict):
+                    return JsonResponse({"error": f"Invalid structure in dataset: {dataset}"}, status=400)
+
+                downloaded_files[dataset] = {}
+
+                for category, urls in categories.items():
+                    if not isinstance(urls, list):
+                        return JsonResponse({"error": f"Invalid URL list in {dataset}/{category}"}, status=400)
+
+                    downloaded_files[dataset][category] = []
+
+                    for url in urls:
+                        file_name = os.path.basename(url)
+                        file_path = f"downloads/{repo_id}_{dataset}_{category}_{file_name}"
+
+                        # Ensure directories exist
+                        os.makedirs(os.path.dirname(default_storage.path(file_path)), exist_ok=True)
+
+                        file_response = requests.get(url, stream=True)
+                        if file_response.status_code == 200:
+                            default_storage.save(file_path, ContentFile(file_response.content))
+                            downloaded_files[dataset][category].append(file_path)
+                        else:
+                            return JsonResponse({"error": f"Failed to download {url}"}, status=500)
 
             return JsonResponse({"downloaded_files": downloaded_files})
+
+        except requests.exceptions.RequestException as e:
+            return JsonResponse({"error": f"Request failed: {str(e)}"}, status=500)
         except Exception as e:
             return JsonResponse({"error": str(e)}, status=500)
 
-    # CHANGE START: Removed asyncio.run(), now just await the get method directly
-    async def dispatch(self, request):
-        """Handle async dispatch without asyncio.run()."""
-        if asyncio.iscoroutinefunction(self.get):  # Check if get is async
-            return await self.get(request)  # Await the async get method directly
-        return await super().dispatch(request)  # Call parent dispatch for regular flow
-        # CHANGE END
-
-
-class HuggingfaceParquetFilesView3(APIView):
-    from django.views.decorators.csrf import csrf_exempt
-    async def fetch_and_save(self, session, url, file_path):
-        """Asynchronously download and save a file."""
-        try:
-            async with session.get(url) as response:
-                if response.status != 200:
-                    return {"error": f"Failed to download {url}"}
-                # Save file asynchronously
-                content = await response.read()
-                default_storage.save(file_path, ContentFile(content))
-                return {"success": file_path}
-        except Exception as e:
-            return {"error": f"Exception while downloading {url}: {str(e)}"}
-
-    async def download_files(self, json_data, repo_id):
-        """Handles multiple concurrent downloads."""
-        tasks = []
-        downloaded_files = {}
-        async with aiohttp.ClientSession() as session:
-            for dataset, categories in json_data.items():
-                downloaded_files[dataset] = {}
-                for category, urls in categories.items():
-                    downloaded_files[dataset][category] = []
-                    for url in urls:
-                        # Generate a hashed filename
-                        file_name = os.path.basename(url)
-                        hashed_name = hashlib.sha256(f"{repo_id}".encode()).hexdigest()[:16]  # Use first 16 chars
-                        file_path = f"downloads/{hashed_name}/{dataset}_{category}_{file_name}"
-                        # Ensure directories exist
-                        os.makedirs(os.path.dirname(default_storage.path(file_path)), exist_ok=True)
-                        # Schedule async download
-                        task = self.fetch_and_save(session, url, file_path)
-                        tasks.append(task)
-                        downloaded_files[dataset][category].append(file_path)
-            # Run tasks concurrently
-            results = await asyncio.gather(*tasks)
-            # Check for errors in results
-            for result in results:
-                if "error" in result:
-                    return JsonResponse(result, status=500)
-        return downloaded_files
-
-    async def update_database(self, repo_id, dataset_status, download_links):
-        """Update dataset status and download links in database."""
-        try:
-            dataset = await sync_to_async(InternationalDataset.objects.get)(name=repo_id)
-            dataset.dataset_status = dataset_status
-            dataset.downloadLink = download_links
-            await sync_to_async(dataset.save)()
-        except InternationalDataset.DoesNotExist:
-            return {"error": f"Repo with repo_id {repo_id} not found in the database."}
-
-    async def process_repo(self, repo_id):
-        """Process a single repo_id (fetch, download, update database)."""
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(f"https://huggingface.co/api/datasets/{repo_id}/parquet") as response:
-                    if response.status != 200:
-                        return {"error": f"Failed to fetch data from Hugging Face. Status: {response.status}"}
-                    json_data = await response.json()
-
-            if not isinstance(json_data, dict):
-                return {"error": "Invalid JSON format received from Hugging Face"}
-
-            # Download files asynchronously
-            downloaded_files = await self.download_files(json_data, repo_id)
-
-            # Update database status
-            await self.update_database(repo_id, "Download_Completed", downloaded_files)
-            return {"repo_id": repo_id, "downloaded_files": downloaded_files}
-
-        except Exception as e:
-            return {"repo_id": repo_id, "error": str(e)}
-
-
-    @csrf_exempt
-    async def get(self, request):
-        """Handles GET requests asynchronously for multiple repo_ids."""
-        repo_ids = request.GET.getlist("repo_id")  # دریافت چندین repo_id
-        if not repo_ids:
+    def get(self, request):
+        repo_id = request.GET.get("repo_id")
+        if not repo_id:
             return JsonResponse({"error": "Missing repo_id parameter"}, status=400)
 
-        # پردازش موازی چندین repo_id
-        tasks = [self.process_repo(repo_id) for repo_id in repo_ids]
-        results = await asyncio.gather(*tasks)
-
-        return JsonResponse({"results": results})
-
-
-    def dispatch(self, request):
-        """Override dispatch to handle async execution."""
-        if asyncio.iscoroutinefunction(self.get):
-            return asyncio.run(self.get(request))
-        return super().dispatch(request)
-
-
-class HuggingfaceParquetFilesView4(APIView):
-
-    async def fetch_and_save(self, session, url, file_path):
-        """Asynchronously download and save a file."""
         try:
-            async with session.get(url) as response:
-                if response.status != 200:
-                    return {"error": f"Failed to download {url}"}
+            # Fetch JSON data from Hugging Face API
+            response = requests.get(f"https://huggingface.co/api/datasets/{repo_id}/parquet")
 
-                # Save file asynchronously
-                content = await response.read()
-                default_storage.save(file_path, ContentFile(content))
-                return {"success": file_path}
+            if response.status_code != 200:
+                return JsonResponse(
+                    {"error": f"Failed to fetch data from Hugging Face. Status: {response.status_code}"},
+                    status=response.status_code)
 
-        except Exception as e:
-            return {"error": f"Exception while downloading {url}: {str(e)}"}
+            json_data = response.json()
 
-    async def download_files(self, json_data, repo_id):
-        """Handles multiple concurrent downloads."""
-        tasks = []
-        downloaded_files = {}
+            if not isinstance(json_data, dict):
+                return JsonResponse({"error": "Invalid JSON format received from Hugging Face"}, status=400)
 
-        async with aiohttp.ClientSession() as session:
+            downloaded_files = {}
+
             for dataset, categories in json_data.items():
+                if not isinstance(categories, dict):
+                    return JsonResponse({"error": f"Invalid structure in dataset: {dataset}"}, status=400)
+
                 downloaded_files[dataset] = {}
 
                 for category, urls in categories.items():
+                    if not isinstance(urls, list):
+                        return JsonResponse({"error": f"Invalid URL list in {dataset}/{category}"}, status=400)
+
                     downloaded_files[dataset][category] = []
 
                     for url in urls:
-                        # Generate a hashed filename
+                        # Generate SHA-256 hash of repo_id + filename
                         file_name = os.path.basename(url)
                         hashed_name = hashlib.sha256(f"{repo_id}".encode()).hexdigest()[:16]  # Use first 16 chars
-                        file_path = f"downloads/{hashed_name}/{dataset}_{category}_{file_name}"
+
+                        # Define file path
+                        file_path = f"downloads/{hashed_name}/{dataset}_{category}_{file_name}.parquet"
 
                         # Ensure directories exist
                         os.makedirs(os.path.dirname(default_storage.path(file_path)), exist_ok=True)
 
-                        # Schedule async download
-                        task = self.fetch_and_save(session, url, file_path)
-                        tasks.append(task)
+                        file_response = requests.get(url, stream=True)
+                        if file_response.status_code == 200:
+                            default_storage.save(file_path, ContentFile(file_response.content))
+                            downloaded_files[dataset][category].append(file_path)
+                        else:
+                            return JsonResponse({"error": f"Failed to download {url}"}, status=500)
 
-                        downloaded_files[dataset][category].append(file_path)
+            return JsonResponse({"downloaded_files": downloaded_files})
 
-            # Run tasks concurrently
-            results = await asyncio.gather(*tasks)
-
-            # Check for errors in results
-            for result in results:
-                if "error" in result:
-                    return JsonResponse(result, status=500)
-
-        return downloaded_files
-
-    async def get_repo_data(self, repo_id):
-        """Fetch dataset metadata from Hugging Face API."""
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(f"https://huggingface.co/api/datasets/{repo_id}/parquet") as response:
-                    if response.status != 200:
-                        return {"error": f"Failed to fetch data from Hugging Face for repo_id {repo_id}. Status: {response.status}"}
-
-                    json_data = await response.json()
-
-            if not isinstance(json_data, dict):
-                return {"error": f"Invalid JSON format received from Hugging Face for repo_id {repo_id}"}
-
-            return json_data
-
-        except Exception as e:
-            return {"error": f"Exception while fetching data for repo_id {repo_id}: {str(e)}"}
-
-    async def update_repo_status(self, repo_id, status):
-        """Update the status of the repo in the database."""
-        try:
-            internationalDataset = InternationalDataset.objects.get(repo_id=repo_id)
-            internationalDataset.dataset_status = status
-            internationalDataset.save()
-        except InternationalDataset.DoesNotExist:
-            return {"error": f"Repo with repo_id {repo_id} not found in the database."}
-
-    async def get(self, request):
-        """Handles GET requests asynchronously."""
-        count = request.GET.get('count')
-        repo_ids = InternationalDataset.objects.filter(dataset_status='Initialized',referenceOwner='HuggingFace').values_list('name', flat=True).order_by('-downloads')[:count]
-        print(repo_ids)
-        if not repo_ids:
-            return JsonResponse({"error": "Missing repo_ids parameter"}, status=400)
-
-        try:
-            all_downloaded_files = {}
-            # Start downloading files for each repo_id
-            for repo_id in repo_ids:
-                # Update status to "in_progress" before starting the download
-                await self.update_repo_status(repo_id, "Download_Progress")
-
-                # Fetch dataset metadata for each repo_id
-                json_data = await self.get_repo_data(repo_id)
-
-                if "error" in json_data:
-                    await self.update_repo_status(repo_id, "Download_Failed")  # Update status to "failed" if error occurred
-                    return JsonResponse(json_data, status=500)
-
-                # Download files asynchronously for each repo_id
-                downloaded_files = await self.download_files(json_data, repo_id)
-
-                # Update status to "completed" after successful download
-                await self.update_repo_status(repo_id, "Download_Completed")
-
-                all_downloaded_files[repo_id] = downloaded_files
-
-            return JsonResponse({"downloaded_files": all_downloaded_files})
-
+        except requests.exceptions.RequestException as e:
+            return JsonResponse({"error": f"Request failed: {str(e)}"}, status=500)
         except Exception as e:
             return JsonResponse({"error": str(e)}, status=500)
-
-        # CHANGE START: Handle async dispatch for the view
-        async def dispatch(self, request):
-            """Handle async dispatch without asyncio.run()."""
-            if asyncio.iscoroutinefunction(self.get):  # Check if get is async
-                return await self.get(request)  # Await the async get method directly
-            return await super().dispatch(request)  # Call parent dispatch for regular flow
-        # CHANGE END**
-
-
-
-
-
 
 
 class ImportHuggingfaceView(APIView):
@@ -443,6 +230,9 @@ class BulkImportHuggingfaceView(APIView):
                 card_data = data.get('cardData', {})
                 dataset_info = card_data.get('dataset_info', {})
 
+                repo_id = data.get('id')
+                parquet_files = requests.get(f"https://huggingface.co/api/datasets/{repo_id}/parquet").json()
+
                 dataset_format = ''
                 if data.get('tags'):
                     dataset_format = next((tag.split(":")[1] for tag in data.get('tags') if tag.startswith("format:")), None)
@@ -482,6 +272,7 @@ class BulkImportHuggingfaceView(APIView):
                     "likes": data.get('likes'),
                     "downloads": data.get('downloads'),
                     "referenceOwner": 'HuggingFace',
+                    "downloadLink": parquet_files,
                     "sourceJson": data,
                 }
 

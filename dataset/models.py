@@ -1,5 +1,6 @@
 from django.contrib.auth.models import User
 from django.db import models
+from taggit.managers import TaggableManager
 
 
 
@@ -67,6 +68,23 @@ class InternationalDataset(models.Model):
 
 
 class Dataset(models.Model):
+    CREATE_TYPE = (
+        ('Create', 'Create'),
+        ('Transfer', 'Transfer')
+    )
+
+    DATA_TYPE = (
+        ('Text', 'Text'),
+        ('Image', 'Image'),
+        ('Audio', 'Audio'),
+        ('Video', 'Video'),
+        ('GeoData', 'GeoData')
+    )
+
+    REQUEST_REQUIRED = (
+        ('Yes', 'Yes'),
+        ('No', 'No')
+    )
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='datasets', blank=True, null=True)
     code = models.CharField(max_length=100, blank=True, null=True)
     name = models.CharField(max_length=1000, blank=True, null=True)
@@ -82,9 +100,18 @@ class Dataset(models.Model):
     tasks = models.CharField(max_length=1000, blank=True, null=True)
     datasetDate = models.DateTimeField(blank=True, null=True)
     columnDataType = models.JSONField(blank=True, null=True)
-    sourceJson = models.JSONField(blank=True, null=True)
     image = models.ImageField(upload_to='images', blank=True, null=True)
-
+    requestRequired = models.CharField(max_length=50, choices=REQUEST_REQUIRED, default='No', blank=True, null=True)
+    downloadLink = models.JSONField(blank=True, null=True)
+    price = models.FloatField(blank=True, null=True)
+    downloadCount = models.IntegerField(blank=True, null=True)
+    referenceOwner = models.CharField(max_length=500, blank=True, null=True)
+    createType = models.CharField(max_length=50, choices=CREATE_TYPE, default='Create', blank=True, null=True)
+    datasetRate = models.FloatField(blank=True, null=True)
+    dataType = models.CharField(max_length=50, choices=DATA_TYPE, default='Text', blank=True, null=True)
+    dataset_tags = models.TextField(blank=True, null=True)
+    tags = TaggableManager()
+    likes = models.ManyToManyField(User, related_name='likes', blank=True, null=True)
     created = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

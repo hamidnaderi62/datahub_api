@@ -279,7 +279,7 @@ class KaggleDatasetDetailView1(APIView):
 
             # Authenticate and get datasets
             kaggle.api.authenticate()
-            dataset = kaggle.api.dataset_metadata(dataset_ref)
+            dataset = kaggle.api.dataset_metadata(dataset_ref, ".")
 
             return Response({"dataset": dataset}, status=status.HTTP_200_OK)
 
@@ -287,7 +287,7 @@ class KaggleDatasetDetailView1(APIView):
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-class KaggleDatasetDetailView(APIView):
+class KaggleDatasetDetailView2(APIView):
     def get(self, request):
         dataset_ref = request.GET.get('dataset_ref')
 
@@ -309,15 +309,15 @@ class KaggleDatasetDetailView(APIView):
             # Initialize and authenticate Kaggle API
             api = kaggle.KaggleApi()
             api.authenticate()
-            dataset = api.dataset_metadata(dataset_ref)
+            dataset = api.dataset_metadata(dataset_ref, './temp/')
 
             # Convert dataset object to dictionary
             dataset_info = {
                 "title": dataset.title,
-                "owner": dataset.creatorName,
+                "owner": dataset.owner,
                 "ref": dataset.ref,
                 "size": dataset.size,
-                "license": dataset.licenseName,
+                "license": dataset.license,
                 "totalViews": dataset.totalViews,
                 "totalDownloads": dataset.totalDownloads,
                 "usabilityRating": dataset.usabilityRating,
@@ -329,49 +329,67 @@ class KaggleDatasetDetailView(APIView):
         except Exception as e:
             return Response({"error": f"Unexpected error: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-class KaggleDatasetsListView1(APIView):
+class KaggleDatasetDetailView(APIView):
+
     def get(self, request):
-        import kaggle
-        from kaggle.api.kaggle_api_extended import KaggleApi
-        api = KaggleApi()
-        api.authenticate()
-        response = api.model_list_cli()
-        # response = requests.get(f"https://huggingface.co/api/datasets")
-        data = response
-        result = {
-            "data": data
-        }
-        return Response(data=result)
+        kaggle_temp_path = "./temp/kaggle/"
+        dataset_ref = request.GET.get('dataset_ref')
 
+        if not dataset_ref:
+            return Response({"error": "dataset_ref parameter is required"}, status=status.HTTP_400_BAD_REQUEST)
 
-class KaggleDatasetsListView2(APIView):
-    def get(self, request):
-        import json
-        import os
-        import kaggle
+        try:
+            kaggle_config_path = 'config/kaggle.json'
+            if not os.path.exists(kaggle_config_path):
+                return Response({"error": "Kaggle credentials file not found"}, status=status.HTTP_400_BAD_REQUEST)
 
-        with open('config/kaggle.json') as f:
-            kaggle_auth = json.load(f)
-            print(kaggle_auth)
+            with open(kaggle_config_path) as f:
+                kaggle_auth = json.load(f)
 
-        os.environ['KAGGLE_USERNAME'] = kaggle_auth['username']  # manually input My_Kaggle User_Name
-        os.environ['KAGGLE_KEY'] = kaggle_auth['key']  # manually input My_Kaggle Key
+            # Set Kaggle API credentials
+            os.environ['KAGGLE_USERNAME'] = kaggle_auth.get('username', '')
+            os.environ['KAGGLE_KEY'] = kaggle_auth.get('key', '')
 
-        kaggle.api.authenticate()
-        response = kaggle.api.dataset_list_cli(page=3)
-        # response = requests.get(f"https://huggingface.co/api/datasets")
-        print('##########################')
-        print(response)
-        data = response
-        result = {
-            "data": data
-        }
-        return Response(data=result)
+            # Initialize and authenticate Kaggle API
+            api = kaggle.KaggleApi()
+            api.authenticate()
 
+            kaggle_metadata_path = os.path.join(kaggle_temp_path, f"{dataset_ref.replace('/', '-')}")
+            api.dataset_metadata(dataset_ref, path=kaggle_metadata_path)
+            with open(os.path.join(kaggle_metadata_path, 'dataset-metadata.json'), "r") as file:
+                metadata = json.load(file)
 
-class KaggleDatasetsListView_old(APIView):
+                # Fetch dataset file list
+                files = api.dataset_list_files(dataset_ref)
+
+                # Define download path
+                hashed_name = hashlib.sha256(f"{dataset_ref}".encode()).hexdigest()[:16]  # Use first 16 chars
+                download_path_kaggle = f"downloads/kaggle/{hashed_name}"
+                os.makedirs(os.path.dirname(default_storage.path(download_path_kaggle)), exist_ok=True)
+
+                # Download dataset files
+                api.dataset_download_files(dataset_ref, path=download_path_kaggle, unzip=True)
+                print(f"Dataset downloaded to: {download_path_kaggle}")
+
+                dataset_info = metadata
+                dataset_details = {
+                    "title": dataset_info.title,
+                    "license": dataset_info.licenses,
+                    "description": dataset_info.description
+                }
+
+                dataset_details['files'] = [file.name for file in files.files]
+
+                #os.remove(os.path.join(kaggle_metadata_path, 'dataset-metadata.json'))
+
+            return Response({"dataset": dataset_details}, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({"error": f"Unexpected error: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class KaggleDatasetsListView(APIView):
     def get(self, request):
         try:
+            page = request.GET.get('page')
             # Load Kaggle credentials from JSON
             kaggle_config_path = 'config/kaggle.json'
             if not os.path.exists(kaggle_config_path):
@@ -384,51 +402,35 @@ class KaggleDatasetsListView_old(APIView):
             os.environ['KAGGLE_USERNAME'] = kaggle_auth.get('username', '')
             os.environ['KAGGLE_KEY'] = kaggle_auth.get('key', '')
 
-            # Authenticate and get datasets
+            # Authenticate Kaggle API
             kaggle.api.authenticate()
-            datasets = kaggle.api.dataset_list(page=3)
-            print(datasets)
 
-            # Convert dataset objects to a dictionary format
-            # data = [{"title": d.title, "ref": d.ref, "url": d.url, "lastUpdated": d.lastUpdated} for d in datasets]
+            # Fetch datasets with pagination
+            datasets = kaggle.api.dataset_list(page=int(page))  # Adjust page number as needed
+            dataset_details = []
 
-            return Response({"datasets": datasets}, status=status.HTTP_200_OK)
+            # Extract key details from each dataset
+            for dataset in datasets:
+                details = {
+                    "id": dataset.id if hasattr(dataset, 'id') else None,
+                    "ref": dataset.ref if hasattr(dataset, 'ref') else None,
+                    "title": dataset.title if hasattr(dataset, 'title') else None,
+                    "subtitle": dataset.subtitle if hasattr(dataset, 'subtitle') else None,
+                    "url": dataset.url if hasattr(dataset, 'url') else None,
+                    "tags": [tag.name for tag in dataset.tags] if hasattr(dataset, 'tags') else [],
+                }
+                dataset_details.append(details)
+
+            return Response({"datasets": dataset_details}, status=status.HTTP_200_OK)
 
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-class KaggleDatasetsListView3(APIView):
+class BulkImportKaggleView(APIView):
+    permission_classes = [IsAuthenticated, BlocklistPermission]
     def get(self, request):
-        try:
-            # Load Kaggle credentials from JSON
-            kaggle_config_path = 'config/kaggle.json'
-            if not os.path.exists(kaggle_config_path):
-                return Response({"error": "Kaggle credentials file not found"},
-                                status=status.HTTP_400_BAD_REQUEST)
-
-            with open(kaggle_config_path) as f:
-                kaggle_auth = json.load(f)
-
-            # Set Kaggle API credentials
-            os.environ['KAGGLE_USERNAME'] = kaggle_auth.get('username', '')
-            os.environ['KAGGLE_KEY'] = kaggle_auth.get('key', '')
-
-            # Authenticate and get datasets
-            kaggle.api.authenticate()
-
-            response = requests.get(f"https://www.kaggle.com/api/v1/datasets/list?group=public&sortby=hottest&size=all&filetype=all&license=all&viewed=unspecified&page=1")
-
-
-
-            return Response({"response": response}, status=status.HTTP_200_OK)
-
-        except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
-
-class KaggleDatasetsListView(APIView):
-    def get(self, request):
+        page = request.GET.get('page')
+        num_added_records = 0
         try:
             # Load Kaggle credentials from JSON
             kaggle_config_path = 'config/kaggle.json'
@@ -446,38 +448,47 @@ class KaggleDatasetsListView(APIView):
             kaggle.api.authenticate()
 
             # Fetch datasets with pagination
-            datasets = kaggle.api.dataset_list(page=1)  # Adjust page number as needed
-            dataset_details = []
+            datasets = kaggle.api.dataset_list(page=int(page))  # Adjust page number as needed
 
-            # Extract key details from each dataset
             for dataset in datasets:
-                details = {
-                    "id": dataset.id if hasattr(dataset, 'id') else None,
-                    "title": dataset.title if hasattr(dataset, 'title') else None,
-                    "subtitle": dataset.subtitle if hasattr(dataset, 'subtitle') else None,
-                    "creatorName": dataset.creatorName if hasattr(dataset, 'creatorName') else None,
-                    "creatorUrl": dataset.creatorUrl if hasattr(dataset, 'creatorUrl') else None,
-                    "url": dataset.url if hasattr(dataset, 'url') else None,
-                    "lastUpdated": dataset.lastUpdated if hasattr(dataset, 'lastUpdated') else None,
-                    "downloadCount": dataset.downloadCount if hasattr(dataset, 'downloadCount') else None,
-                    "viewCount": dataset.viewCount if hasattr(dataset, 'viewCount') else None,
-                    "license": dataset.license if hasattr(dataset, 'license') else None,
-                    "description": dataset.description if hasattr(dataset, 'description') else None,
-                    "kernelCount": dataset.kernelCount if hasattr(dataset, 'kernelCount') else None,
-                    "ownerName": dataset.ownerName if hasattr(dataset, 'ownerName') else None,
-                    "tags": [tag.name for tag in dataset.tags] if hasattr(dataset, 'tags') else [],
-                    "usabilityRating": dataset.usabilityRating if hasattr(dataset, 'usabilityRating') else None,
-                    "voteCount": dataset.voteCount if hasattr(dataset, 'voteCount') else None,
-                    "currentVersion": dataset.currentVersion if hasattr(dataset, 'currentVersion') else None,
-                    "totalBytes": dataset.totalBytes if hasattr(dataset, 'totalBytes') else None
+                try:
+                    result = {
+                        "name": dataset.title if hasattr(dataset, 'title') else None,
+                        # "owner": data.get('author'),
+                        "internalId": dataset.id if hasattr(dataset, 'id') else None,
+                        "internalCode": dataset.ref if hasattr(dataset, 'ref') else None,
+                        # "language":
+                        # "desc":
+                        # "license":
+                        # "tasks":
+                        # "datasetDate":
+                        # "size":
+                        # "format":
+                        # "dataType":
+                        # "columnDataType":
+                        "dataset_tags": ', '.join([tag.name for tag in dataset.tags]),
+                        # "likes":
+                        # "downloads":
+                        "referenceOwner": 'Kaggle',
+                        # "sourceJson":
+                    }
 
-                }
-                dataset_details.append(details)
+                    # Serialize and validate data
+                    ser = InternationalDatasetSerializer(data=result, context={'request': request})
+                    if ser.is_valid():
+                        ser.validated_data['user'] = request.user  # Set user before saving
+                        ser.save()
+                        num_added_records += 1
+                    else:
+                        print(f"Validation error: {ser.errors}")  # Debugging step
 
-            return Response({"datasets": dataset_details}, status=status.HTTP_200_OK)
+                except Exception as e:
+                    print(f"Error processing dataset {dataset.get('id', 'Unknown')}: {e}")
 
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response({"response": f"{num_added_records} Records Added"}, status=status.HTTP_201_CREATED)
 ##################################################
 # PaperWithCode
 ##################################################

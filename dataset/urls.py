@@ -40,6 +40,7 @@ urlpatterns = [
     # Kaggle
     path('KaggleDatasetsList', views.KaggleDatasetsListView.as_view()),
     path('KaggleDatasetDetail', views.KaggleDatasetDetailView.as_view()),
+    path('BulkImportKaggle', views.BulkImportKaggleView.as_view()),
 
     # PaperWithCode
     path('PaperWithCodeDatasetsList', views.PaperWithCodeDatasetsListView.as_view()),

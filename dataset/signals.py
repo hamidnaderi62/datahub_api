@@ -22,6 +22,8 @@ def update_or_create_dataset_after_download(sender, instance, **kwargs):
                 "internalCode": instance.internalCode,
                 "recordsNum": instance.recordsNum,
                 "size": instance.size,
+                "filesCount": instance.filesCount,
+                "refLink": instance.refLink,
                 "format": instance.format,
                 "language": instance.language,
                 "desc": instance.desc,

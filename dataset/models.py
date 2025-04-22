@@ -61,6 +61,8 @@ class InternationalDataset(models.Model):
     likes = models.IntegerField(blank=True, null=True)
     downloads = models.IntegerField(blank=True, null=True)
     dataset_status = models.CharField(max_length=200, choices=DATASET_STATUS, default='Initialized', blank=True, null=True)
+    filesCount = models.IntegerField(blank=True, null=True)
+    refLink = models.TextField(blank=True, null=True)
     created = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -112,6 +114,8 @@ class Dataset(models.Model):
     dataset_tags = models.TextField(blank=True, null=True)
     tags = TaggableManager()
     likes = models.ManyToManyField(User, related_name='likes', blank=True, null=True)
+    filesCount = models.IntegerField(blank=True, null=True)
+    refLink = models.TextField(blank=True, null=True)
     created = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

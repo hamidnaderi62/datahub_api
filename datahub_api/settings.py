@@ -164,3 +164,11 @@ STORAGES = {
         "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
     },
 }
+
+
+
+CLOUD_STORAGE_CONFIG = {
+    'ACCOUNT': 'AUTH_aiahr-ae5aa48e',
+    'AUTH_TOKEN': '391af3cea0e0248b92ad2d2671d4eaa8669854be',
+    'STORAGE_BASE_URL': f'https://storage.aiahura.com/v1/AUTH_aiahr-ae5aa48e/'
+}

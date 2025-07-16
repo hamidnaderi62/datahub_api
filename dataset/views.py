@@ -32,6 +32,17 @@ from django.db import transaction
 import zipfile
 import io
 
+
+##################################################
+# Config
+##################################################
+# Cloud storage configuration
+ACCOUNT = settings.CLOUD_STORAGE_CONFIG['ACCOUNT']
+AUTH_TOKEN = settings.CLOUD_STORAGE_CONFIG['AUTH_TOKEN']
+STORAGE_BASE_URL = settings.CLOUD_STORAGE_CONFIG['STORAGE_BASE_URL']
+
+
+
 class StandardResultsSetPagination(PageNumberPagination):
     page_size = 1
     page_size_query_param = 'page_size'
@@ -47,7 +58,19 @@ class StandardResultsSetPagination(PageNumberPagination):
 ##################################################
 # Huggingface
 ##################################################
+# get Huggingface dataset info
+class HuggingfaceDatasetDetailView(APIView):
+    def get(self, request):
+        repo_id = request.GET.get('repo_id')
+        response = requests.get(f"https://huggingface.co/api/datasets/{repo_id}/croissant")
+        data = response.json()
+        result = {
+            "data": data
+        }
+        return Response(data=result)
 
+
+# get Huggingface dataset list info
 class HuggingfaceDatasetsListView(APIView):
     def get(self, request):
         page = request.GET.get('page')
@@ -60,15 +83,80 @@ class HuggingfaceDatasetsListView(APIView):
         return Response(data=result)
 
 
-class HuggingfaceDatasetDetailView(APIView):
-    def get(self, request):
-        repo_id = request.GET.get('repo_id')
-        response = requests.get(f"https://huggingface.co/api/datasets/{repo_id}/croissant")
-        data = response.json()
-        result = {
-            "data": data
-        }
-        return Response(data=result)
+# Get Huggingface list datasets
+# Insert ref of dataset to InternationalDataset table in database
+class BulkImportHuggingfaceView(APIView):
+    permission_classes = [IsAuthenticated, BlocklistPermission]
+
+    def post(self, request):
+        page = request.GET.get('page')
+        limit = request.GET.get('limit')
+        res = requests.get(f"https://huggingface.co/api/datasets?full=full&limit={limit}")
+        dataList = res.json()
+        num_added_records = 0
+
+        for data in dataList:
+            try:
+                card_data = data.get('cardData', {})
+                dataset_info = card_data.get('dataset_info', {})
+
+                dataset_format = ''
+                if data.get('tags'):
+                    dataset_format = next((tag.split(":")[1] for tag in data.get('tags') if tag.startswith("format:")), None)
+
+                data_type = ''
+                if data.get('tags'):
+                    data_type = next((tag.split(":")[1] for tag in data.get('tags') if tag.startswith("modality:")), None)
+
+                dataset_tags = ''
+                if card_data.get('tags'):
+                    dataset_tags = ', '.join(card_data.get('tags')) + ', ' + ', '.join(card_data.get('task_categories'))
+
+                # If dataset_info is a list, take the first item
+                if isinstance(dataset_info, list) and dataset_info:
+                    dataset_info = dataset_info[0]
+
+                # Extract language and ensure it's a string
+                language = card_data.get('language')
+                if isinstance(language, list):
+                    language = ", ".join(language)  # Convert list to comma-separated string
+
+                result = {
+                    "name": data.get('id'),
+                    "owner": data.get('author'),
+                    "internalId": data.get('_id'),
+                    "internalCode": data.get('id'),
+                    "language": language,  # Ensures it's a string or None
+                    "desc": data.get('description'),
+                    "license": card_data.get('license', [None])[0],  # Avoid IndexError
+                    "tasks": card_data.get('task_categories', [None])[0],
+                    "datasetDate": data.get('createdAt'),
+                    "size": dataset_info.get('dataset_size'),
+                    "format":  dataset_format,
+                    "dataType": data_type,
+                    "columnDataType": dataset_info.get('features'),
+                    "dataset_tags": dataset_tags,
+                    "likes": data.get('likes'),
+                    "downloads": data.get('downloads'),
+                    "referenceOwner": 'HuggingFace',
+                    "refLink": f"https://huggingface.co/datasets/{data.get('id')}'",
+                    "sourceJson": data,
+                }
+
+                # Serialize and validate data
+                ser = InternationalDatasetSerializer(data=result, context={'request': request})
+                if ser.is_valid():
+                    ser.validated_data['user'] = request.user  # Set user before saving
+                    ser.save()
+                    num_added_records += 1
+                else:
+                    print(f"Validation error: {ser.errors}")  # Debugging step
+
+            except Exception as e:
+                print(f"Error processing dataset {data.get('id', 'Unknown')}: {e}")
+
+        return Response({"response": f"{num_added_records} Records Added"}, status=status.HTTP_201_CREATED)
+
 
 
 # Async class for download files
@@ -89,6 +177,9 @@ class HuggingfaceParquetFilesView(APIView):
 
     async def download_files(self, json_data, repo_id):
         """Handles multiple concurrent downloads."""
+        file_urls = []
+        total_file_size = 0
+        total_files_count = 0
         tasks = []
         downloaded_files = {}
         async with aiohttp.ClientSession() as session:
@@ -191,76 +282,224 @@ class ImportHuggingfaceView(APIView):
         return Response(ser.errors, status=400)
 
 
-class BulkImportHuggingfaceView(APIView):
-    permission_classes = [IsAuthenticated, BlocklistPermission]
+import os
+import json
+import hashlib
+import tempfile
+import requests
+from django.conf import settings
+from rest_framework.views import APIView
+from rest_framework import status
+from rest_framework.response import Response
+from django.db import transaction
+from .models import InternationalDataset
+from .serializers import InternationalDatasetSerializer
 
-    def post(self, request):
-        page = 2
-        limit = 10
-        res = requests.get(f"https://huggingface.co/api/datasets?full=full&limit={limit}")
-        dataList = res.json()
-        num_added_records = 0
+import os
+import json
+import hashlib
+import requests
+from django.conf import settings
+from rest_framework.views import APIView
+from rest_framework import status
+from rest_framework.response import Response
+from django.db import transaction
+from urllib.parse import urlparse
+from .models import InternationalDataset
 
-        for data in dataList:
+class TransferHuggingfaceDatasetView(APIView):
+    def upload_storage_huggingface(self, dataset_ref):
+        """Download HuggingFace dataset and upload to cloud storage"""
+        if not dataset_ref:
+            return {"error": "dataset_ref parameter is required"}, status.HTTP_400_BAD_REQUEST
+
+        try:
+            # Get dataset metadata
+            api_url = f"https://huggingface.co/api/datasets/{dataset_ref}"
+            response = requests.get(api_url)
+            if response.status_code != 200:
+                return {
+                    "error": "Failed to fetch dataset metadata",
+                    "status_code": response.status_code
+                }, status.HTTP_500_INTERNAL_SERVER_ERROR
+            metadata = response.json()
+
+            # Get download URLs
+            download_urls = []
             try:
-                card_data = data.get('cardData', {})
-                dataset_info = card_data.get('dataset_info', {})
-
-                dataset_format = ''
-                if data.get('tags'):
-                    dataset_format = next((tag.split(":")[1] for tag in data.get('tags') if tag.startswith("format:")), None)
-
-                data_type = ''
-                if data.get('tags'):
-                    data_type = next((tag.split(":")[1] for tag in data.get('tags') if tag.startswith("modality:")), None)
-
-                dataset_tags = ''
-                if card_data.get('tags'):
-                    dataset_tags = ', '.join(card_data.get('tags')) + ', ' + ', '.join(card_data.get('task_categories'))
-
-                # If dataset_info is a list, take the first item
-                if isinstance(dataset_info, list) and dataset_info:
-                    dataset_info = dataset_info[0]
-
-                # Extract language and ensure it's a string
-                language = card_data.get('language')
-                if isinstance(language, list):
-                    language = ", ".join(language)  # Convert list to comma-separated string
-
-                result = {
-                    "name": data.get('id'),
-                    "owner": data.get('author'),
-                    "internalId": data.get('_id'),
-                    "internalCode": data.get('_id'),
-                    "language": language,  # Ensures it's a string or None
-                    "desc": data.get('description'),
-                    "license": card_data.get('license', [None])[0],  # Avoid IndexError
-                    "tasks": card_data.get('task_categories', [None])[0],
-                    "datasetDate": data.get('createdAt'),
-                    "size": dataset_info.get('dataset_size'),
-                    "format":  dataset_format,
-                    "dataType": data_type,
-                    "columnDataType": dataset_info.get('features'),
-                    "dataset_tags": dataset_tags,
-                    "likes": data.get('likes'),
-                    "downloads": data.get('downloads'),
-                    "referenceOwner": 'HuggingFace',
-                    "sourceJson": data,
-                }
-
-                # Serialize and validate data
-                ser = InternationalDatasetSerializer(data=result, context={'request': request})
-                if ser.is_valid():
-                    ser.validated_data['user'] = request.user  # Set user before saving
-                    ser.save()
-                    num_added_records += 1
-                else:
-                    print(f"Validation error: {ser.errors}")  # Debugging step
-
+                parquet_response = requests.get(f"https://huggingface.co/api/datasets/{dataset_ref}/parquet")
+                if parquet_response.status_code == 200:
+                    data = parquet_response.json()
+                    for config in data.values():
+                        if isinstance(config, dict):
+                            for split in config.values():
+                                if isinstance(split, list):
+                                    download_urls.extend(split)
             except Exception as e:
-                print(f"Error processing dataset {data.get('id', 'Unknown')}: {e}")
+                print(f"Parquet API error: {e}")
 
-        return Response({"response": f"{num_added_records} Records Added"}, status=status.HTTP_201_CREATED)
+            # Fallback to files API if no parquet URLs found
+            ALLOWED_EXTENSIONS = {'.csv', '.parquet', '.zip', '.rar'}
+            if not download_urls:
+                files_response = requests.get(f"https://huggingface.co/api/datasets/{dataset_ref}/tree/main")
+                if files_response.status_code == 200:
+                    files_data = files_response.json()
+                    download_urls = [
+                        f"https://huggingface.co/datasets/{dataset_ref}/resolve/main/{f['path']}"
+                        for f in files_data
+                        if f['type'] == 'file' and
+                           any(f['path'].lower().endswith(ext) for ext in ALLOWED_EXTENSIONS)
+                    ]
+
+            if not download_urls:
+                return {
+                    "error": "No downloadable files found",
+                    "details": "Neither parquet nor regular files were accessible"
+                }, status.HTTP_400_BAD_REQUEST
+
+            # Create storage container
+            container_name = hashlib.sha256(dataset_ref.encode()).hexdigest()[:16]
+            container_url = f'{settings.CLOUD_STORAGE_CONFIG["STORAGE_BASE_URL"]}{container_name}'
+            headers = {'X-Auth-Token': settings.CLOUD_STORAGE_CONFIG["AUTH_TOKEN"]}
+            response = requests.put(container_url, headers=headers, verify=False)
+
+            if response.status_code not in [201, 202]:
+                return {
+                    "error": "Failed to create storage container",
+                    "details": response.text
+                }, status.HTTP_500_INTERNAL_SERVER_ERROR
+
+            # Process files
+            file_urls = []
+            total_size = 0
+            for file_url in download_urls:
+                try:
+                    file_name = os.path.basename(file_url)
+                    file_response = requests.get(file_url, stream=True)
+                    if file_response.status_code != 200:
+                        continue
+
+                    file_size = int(file_response.headers.get('content-length', 0))
+                    total_size += file_size
+
+                    # Upload to storage
+                    storage_url = f'{container_url}/{file_name}'
+                    upload_response = requests.put(
+                        storage_url,
+                        headers={
+                            'X-Auth-Token': settings.CLOUD_STORAGE_CONFIG["AUTH_TOKEN"],
+                            'Content-Type': 'application/octet-stream'
+                        },
+                        data=file_response.content
+                    )
+                    if upload_response.status_code not in [201, 202]:
+                        print(f"Failed to upload {file_name}: {upload_response.text}")
+                        continue
+
+                    file_urls.append({
+                        "url": storage_url,
+                        "size": file_size,
+                        "size_human": f"{file_size / (1024 * 1024):.2f} MB" if file_size > 1024 * 1024
+                        else f"{file_size / 1024:.2f} KB"
+                    })
+                except Exception as e:
+                    print(f"Error processing {file_url}: {str(e)}")
+                    continue
+
+
+            if not file_urls:
+                return {
+                    "error": "Failed to download/upload any files",
+                    "details": "All file transfers failed"
+                }, status.HTTP_500_INTERNAL_SERVER_ERROR
+
+                # Prepare response
+            card_data = metadata.get('cardData', {})
+            dataset_info = card_data.get('dataset_info', {})
+            if isinstance(dataset_info, list) and dataset_info:
+                dataset_info = dataset_info[0]
+
+            language = card_data.get('language', '')
+            if isinstance(language, list):
+                language = ", ".join(language)
+
+            return {
+                "code": container_name,
+                "title": metadata.get('id', ''),
+                "name": metadata.get('id', ''),
+                "datasetId": metadata.get('_id', ''),
+                "description": metadata.get('description', ''),
+                "owner": metadata.get('author', ''),
+                "totalViews": metadata.get('likes', 0),
+                "totalDownloads": metadata.get('downloads', 0),
+                "files": file_urls,
+                "size": total_size,
+                "filesCount": len(file_urls),
+                "refLink": f"https://huggingface.co/datasets/{dataset_ref}",
+                "keywords": ", ".join(card_data.get('tags', [])),
+                "licenses": ", ".join(card_data.get('license', [])),
+                "language": language,
+                "referenceOwner": 'HuggingFace',
+                "tasks": ", ".join(card_data.get('task_categories', []))
+            }, status.HTTP_200_OK
+
+        except Exception as e:
+            return {
+                "error": "Unexpected error",
+                "details": str(e)
+            }, status.HTTP_500_INTERNAL_SERVER_ERROR
+
+
+    def get(self, request):
+        dataset_ref = request.GET.get('dataset_ref')
+        if not dataset_ref:
+            return Response({"error": "dataset_ref parameter is required"},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            # Get and upload dataset
+            dataset_details, status_code = self.upload_storage_huggingface(dataset_ref)
+            if status_code != status.HTTP_200_OK:
+                return Response(dataset_details, status=status_code)
+
+            # Create or update InternationalDataset
+            try:
+                international_dataset = InternationalDataset.objects.get(internalCode=dataset_ref)
+            except InternationalDataset.DoesNotExist:
+                international_dataset = InternationalDataset(internalCode=dataset_ref)
+
+            with transaction.atomic():
+                international_dataset.code = dataset_details.get('code', '')
+                international_dataset.name = dataset_details.get('name', '')
+                international_dataset.owner = dataset_details.get('owner', '')
+                international_dataset.internalId = str(dataset_details.get('datasetId', ''))
+                international_dataset.desc = dataset_details.get('description', '')
+                international_dataset.license = dataset_details.get('licenses', '')
+                international_dataset.dataset_tags = dataset_details.get('keywords', '')
+                international_dataset.likes = dataset_details.get('totalViews', 0)
+                international_dataset.downloads = dataset_details.get('totalDownloads', 0)
+                international_dataset.size = dataset_details.get('size')
+                international_dataset.downloadLink = dataset_details.get('files', [])
+                international_dataset.filesCount = dataset_details.get('filesCount')
+                international_dataset.refLink = dataset_details.get('refLink')
+                international_dataset.language = dataset_details.get('language', '')
+                international_dataset.tasks = dataset_details.get('tasks', '')
+                international_dataset.referenceOwner = dataset_details.get('referenceOwner', '')
+                international_dataset.dataset_status = 'Download_Completed'
+                international_dataset.save()
+
+            return Response({
+                "status": "success",
+                "dataset_id": international_dataset.id
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({
+                "error": "Unexpected error",
+                "details": str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 ##################################################
 # Kaggle
 ##################################################
@@ -436,31 +675,19 @@ class KaggleDatasetsListView(APIView):
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-
-
-# Cloud storage configuration
-ACCOUNT = 'AUTH_aiahr-ae5aa48e'
-AUTH_TOKEN = '391af3cea0e0248b92ad2d2671d4eaa8669854be'
-STORAGE_BASE_URL = f'https://storage.aiahura.com/v1/{ACCOUNT}/'
-
-# get kaggle dataset info
-# download dataset files
-# upload file to cloud storage
-class UploadStorageKaggleView(APIView):
+# step 1
+# get kaggle list datasets
+# insert ref of dataset to InternationalDataset table in database
+class BulkImportKaggleView(APIView):
+    permission_classes = [IsAuthenticated, BlocklistPermission]
     def get(self, request):
-        kaggle_temp_path = "./temp/kaggle/"
-        dataset_ref = request.GET.get('dataset_ref')
-
-        if not dataset_ref:
-            return Response({"error": "dataset_ref parameter is required"},
-                            status=status.HTTP_400_BAD_REQUEST)
-
+        page = request.GET.get('page')
+        num_added_records = 0
         try:
-            # Check and load Kaggle credentials
+            # Load Kaggle credentials from JSON
             kaggle_config_path = 'config/kaggle.json'
             if not os.path.exists(kaggle_config_path):
-                return Response({"error": "Kaggle credentials file not found"},
-                                status=status.HTTP_400_BAD_REQUEST)
+                return Response({"error": "Kaggle credentials file not found"}, status=status.HTTP_400_BAD_REQUEST)
 
             with open(kaggle_config_path) as f:
                 kaggle_auth = json.load(f)
@@ -469,161 +696,53 @@ class UploadStorageKaggleView(APIView):
             os.environ['KAGGLE_USERNAME'] = kaggle_auth.get('username', '')
             os.environ['KAGGLE_KEY'] = kaggle_auth.get('key', '')
 
-            # Initialize and authenticate Kaggle API
-            api = kaggle.KaggleApi()
-            api.authenticate()
+            # Authenticate Kaggle API
+            kaggle.api.authenticate()
 
-            # Create temp directory for metadata
-            os.makedirs(kaggle_temp_path, exist_ok=True)
-            kaggle_metadata_path = os.path.join(kaggle_temp_path, f"{dataset_ref.replace('/', '-')}")
-            os.makedirs(kaggle_metadata_path, exist_ok=True)
+            # Fetch datasets with pagination
+            datasets = kaggle.api.dataset_list(page=int(page))  # Adjust page number as needed
 
-            # Get dataset metadata
-            api.dataset_metadata(dataset_ref, path=kaggle_metadata_path)
-            metadata_file = os.path.join(kaggle_metadata_path, 'dataset-metadata.json')
-
-            # Enhanced metadata parsing
-            with open(metadata_file, "r") as file:
-                metadata_content = file.read().strip()
-
+            for dataset in datasets:
                 try:
-                    # First try to parse as regular JSON
-                    metadata = json.loads(metadata_content)
+                    result = {
+                        "name": dataset.title if hasattr(dataset, 'title') else None,
+                        # "owner": data.get('author'),
+                        "internalId": dataset.id if hasattr(dataset, 'id') else None,
+                        "internalCode": dataset.ref if hasattr(dataset, 'ref') else None,
+                        # "language":
+                        # "desc":
+                        # "license":
+                        # "tasks":
+                        # "datasetDate":
+                        # "size":
+                        # "format":
+                        # "dataType":
+                        # "columnDataType":
+                        "dataset_tags": ', '.join([tag.name for tag in dataset.tags]),
+                        # "likes":
+                        # "downloads":
+                        "referenceOwner": 'Kaggle',
+                        # "sourceJson":
+                    }
 
-                    # If the result is a string, it might be doubly-encoded
-                    if isinstance(metadata, str):
-                        try:
-                            # Parse the inner JSON
-                            metadata = json.loads(metadata)
-                        except json.JSONDecodeError as inner_error:
-                            # If that fails, try cleaning the inner string
-                            cleaned_inner = metadata.replace('\\"', '"')
-                            metadata = json.loads(cleaned_inner)
-                except json.JSONDecodeError as outer_error:
-                    # If initial parse fails, try cleaning the outer string
-                    try:
-                        cleaned_outer = metadata_content.replace('\\"', '"')
-                        metadata = json.loads(cleaned_outer)
+                    # Serialize and validate data
+                    ser = InternationalDatasetSerializer(data=result, context={'request': request})
+                    if ser.is_valid():
+                        ser.validated_data['user'] = request.user  # Set user before saving
+                        ser.save()
+                        num_added_records += 1
+                    else:
+                        print(f"Validation error: {ser.errors}")  # Debugging step
 
-                        # Check if we need to parse again
-                        if isinstance(metadata, str):
-                            metadata = json.loads(metadata)
-                    except json.JSONDecodeError:
-                        return Response({
-                            "error": "Failed to parse doubly-encoded metadata",
-                            "content_sample": metadata_content[:200] + "..." if len(
-                                metadata_content) > 200 else metadata_content,
-                            "parsing_steps": [
-                                "1. Tried direct JSON parse",
-                                "2. Tried cleaning outer JSON",
-                                "3. Tried parsing inner JSON"
-                            ]
-                        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-                # Verify we got a dictionary
-            if not isinstance(metadata, dict):
-                return Response({
-                    "error": "Final metadata is not a dictionary",
-                    "metadata_type": str(type(metadata)),
-                    "metadata_content": str(metadata)[:200] + "..." if len(str(metadata)) > 200 else str(metadata)
-                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-            # Get dataset files
-            files = api.dataset_list_files(dataset_ref)
-
-            # Prepare download path
-            hashed_name = hashlib.sha256(f"{dataset_ref}".encode()).hexdigest()[:16]
-            download_path_kaggle = f"downloads/kaggle/{hashed_name}"
-            os.makedirs(default_storage.path(download_path_kaggle), exist_ok=True)
-
-            # Download dataset files
-            api.dataset_download_files(dataset_ref, path=default_storage.path(download_path_kaggle), unzip=True)
-            # Prepare response data with proper defaults
-
-            # Generate container name from dataset ID
-            container_name = hashlib.sha256(str(metadata.get("datasetId")).encode()).hexdigest()[:16]
-
-            # Create container in cloud storage
-            container_url = f'{STORAGE_BASE_URL}{container_name}'
-            headers = {
-                'X-Auth-Token': AUTH_TOKEN
-            }
-            response = requests.put(container_url, headers=headers, verify=False)
-
-            if response.status_code not in [201, 202]:
-                return Response({
-                    "error": "Failed to create storage container",
-                    "details": response.text
-                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-            # Create temporary directory for download
-            with tempfile.TemporaryDirectory() as temp_dir:
-                # Download dataset files to temp directory
-                api.dataset_download_files(dataset_ref, path=temp_dir, unzip=True)
-
-                # Upload all files to cloud storage
-                file_urls = []
-                for root, _, files in os.walk(temp_dir):
-                    for file_name in files:
-                        file_path = os.path.join(root, file_name)
-
-                        # Read file content
-                        with open(file_path, 'rb') as f:
-                            file_data = f.read()
-
-                        # Upload to cloud storage
-                        file_url = f'{STORAGE_BASE_URL}{container_name}/{file_name}'
-                        headers = {
-                            'X-Auth-Token': AUTH_TOKEN,
-                            'Content-Type': 'application/octet-stream'
-                        }
-                        upload_response = requests.put(file_url, headers=headers, data=file_data)
-
-                        if upload_response.status_code in [201, 202]:
-                            file_urls.append(file_url)
-                        else:
-                            return Response({
-                                "error": f"Failed to upload file {file_name}",
-                                "details": upload_response.text
-                            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-            # Prepare response data with cloud storage URLs
-            dataset_details = {
-                "title": metadata.get("title", "No title available"),
-                "datasetId": metadata.get("datasetId"),
-                "datasetSlug": metadata.get("datasetSlug", ""),
-                "description": metadata.get("description", ""),
-                "owner": metadata.get("ownerUser", "Unknown owner"),
-                "usabilityRating": metadata.get("usabilityRating", 0),
-                "totalViews": metadata.get("totalViews", 0),
-                "totalVotes": metadata.get("totalVotes", 0),
-                "totalDownloads": metadata.get("totalDownloads", 0),
-                "files": file_urls,
-                "container_name": container_name,
-                "keywords": ", ".join([keyword for keyword in metadata.get("keywords", [])]),
-                "licenses": ", ".join([lic.get("name", "") for lic in metadata.get("licenses", [])])
-            }
-
-            # Clean up local metadata file if it exists
-            if os.path.exists(metadata_file):
-                os.remove(metadata_file)
-            if os.path.exists(kaggle_metadata_path):
-                try:
-                    os.rmdir(kaggle_metadata_path)
-                except OSError:
-                    pass  # Directory not empty
-
-            return Response({"dataset": dataset_details}, status=status.HTTP_200_OK)
+                except Exception as e:
+                    print(f"Error processing dataset {dataset.get('id', 'Unknown')}: {e}")
 
         except Exception as e:
-            return Response({
-                "error": "Unexpected error",
-                "details": str(e),
-                "type": type(e).__name__
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+        return Response({"response": f"{num_added_records} Records Added"}, status=status.HTTP_201_CREATED)
 
-
+# step 2
 # get kaggle dataset info
 # download dataset files
 # upload file to cloud storage
@@ -839,7 +958,8 @@ class TransferKaggleDatasetView(APIView):
             file_urls = []
             total_file_size = 0
             total_files_count = 0
-            ref_link = f'https://www.kaggle.com/datasets/{metadata.get("ownerUser", "")}/{dataset_ref}'
+            #ref_link = f'https://www.kaggle.com/datasets/{metadata.get("ownerUser", "")}/{dataset_ref}'
+            ref_link = f'https://www.kaggle.com/datasets/{dataset_ref}'
             with tempfile.TemporaryDirectory() as temp_dir:
                 api.dataset_download_files(dataset_ref, path=temp_dir, unzip=True)
 
@@ -856,20 +976,21 @@ class TransferKaggleDatasetView(APIView):
                                 headers={'X-Auth-Token': AUTH_TOKEN, 'Content-Type': 'application/octet-stream'},
                                 data=f
                             )
-                if upload_response.status_code not in [201, 202]:
-                    return {
-                        "error": f"Failed to upload file {file_name}", "details": upload_response.text
-                    }, status.HTTP_500_INTERNAL_SERVER_ERROR
+                            if upload_response.status_code not in [201, 202]:
+                                return {
+                                    "error": f"Failed to upload file {file_name}", "details": upload_response.text
+                                }, status.HTTP_500_INTERNAL_SERVER_ERROR
 
-                    # Store both URL and size information
-                file_urls.append({
-                    "url": file_url,
-                    "size": file_size,
-                    "size_human": f"{file_size / 1024:.2f} KB" if file_size < 1024 * 1024 else f"{file_size / (1024 * 1024):.2f} MB"
-                })
+                                # Store both URL and size information
+                            file_urls.append({
+                                "url": file_url,
+                                "size": file_size,
+                                "size_human": f"{file_size / 1024:.2f} KB" if file_size < 1024 * 1024 else f"{file_size / (1024 * 1024):.2f} MB"
+                            })
 
                 # Prepare response
                 dataset_details = {
+                    "code": container_name,
                     "title": metadata.get("title", ""),
                     "datasetId": metadata.get("datasetId"),
                     "description": metadata.get("description", ""),
@@ -901,7 +1022,6 @@ class TransferKaggleDatasetView(APIView):
                 "details": str(e)
             }, status.HTTP_500_INTERNAL_SERVER_ERROR
 
-
     def get(self, request):
         dataset_ref = request.GET.get('dataset_ref')
         if not dataset_ref:
@@ -919,6 +1039,7 @@ class TransferKaggleDatasetView(APIView):
                 international_dataset = InternationalDataset.objects.get(internalCode=dataset_ref)
 
                 with transaction.atomic():
+                    international_dataset.code = dataset_details.get('code', '')
                     international_dataset.owner = dataset_details.get('owner', '')
                     international_dataset.internalId = str(dataset_details.get('datasetId', ''))
                     international_dataset.desc = dataset_details.get('description', '')
@@ -948,18 +1069,25 @@ class TransferKaggleDatasetView(APIView):
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-# get kaggle list datasets
-# insert ref of dataset to InternationalDataset table in database
-class BulkImportKaggleView(APIView):
-    permission_classes = [IsAuthenticated, BlocklistPermission]
+
+# get kaggle dataset info
+# download dataset files
+# upload file to cloud storage
+class UploadStorageKaggleView(APIView):
     def get(self, request):
-        page = request.GET.get('page')
-        num_added_records = 0
+        kaggle_temp_path = "./temp/kaggle/"
+        dataset_ref = request.GET.get('dataset_ref')
+
+        if not dataset_ref:
+            return Response({"error": "dataset_ref parameter is required"},
+                            status=status.HTTP_400_BAD_REQUEST)
+
         try:
-            # Load Kaggle credentials from JSON
+            # Check and load Kaggle credentials
             kaggle_config_path = 'config/kaggle.json'
             if not os.path.exists(kaggle_config_path):
-                return Response({"error": "Kaggle credentials file not found"}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({"error": "Kaggle credentials file not found"},
+                                status=status.HTTP_400_BAD_REQUEST)
 
             with open(kaggle_config_path) as f:
                 kaggle_auth = json.load(f)
@@ -968,51 +1096,159 @@ class BulkImportKaggleView(APIView):
             os.environ['KAGGLE_USERNAME'] = kaggle_auth.get('username', '')
             os.environ['KAGGLE_KEY'] = kaggle_auth.get('key', '')
 
-            # Authenticate Kaggle API
-            kaggle.api.authenticate()
+            # Initialize and authenticate Kaggle API
+            api = kaggle.KaggleApi()
+            api.authenticate()
 
-            # Fetch datasets with pagination
-            datasets = kaggle.api.dataset_list(page=int(page))  # Adjust page number as needed
+            # Create temp directory for metadata
+            os.makedirs(kaggle_temp_path, exist_ok=True)
+            kaggle_metadata_path = os.path.join(kaggle_temp_path, f"{dataset_ref.replace('/', '-')}")
+            os.makedirs(kaggle_metadata_path, exist_ok=True)
 
-            for dataset in datasets:
+            # Get dataset metadata
+            api.dataset_metadata(dataset_ref, path=kaggle_metadata_path)
+            metadata_file = os.path.join(kaggle_metadata_path, 'dataset-metadata.json')
+
+            # Enhanced metadata parsing
+            with open(metadata_file, "r") as file:
+                metadata_content = file.read().strip()
+
                 try:
-                    result = {
-                        "name": dataset.title if hasattr(dataset, 'title') else None,
-                        # "owner": data.get('author'),
-                        "internalId": dataset.id if hasattr(dataset, 'id') else None,
-                        "internalCode": dataset.ref if hasattr(dataset, 'ref') else None,
-                        # "language":
-                        # "desc":
-                        # "license":
-                        # "tasks":
-                        # "datasetDate":
-                        # "size":
-                        # "format":
-                        # "dataType":
-                        # "columnDataType":
-                        "dataset_tags": ', '.join([tag.name for tag in dataset.tags]),
-                        # "likes":
-                        # "downloads":
-                        "referenceOwner": 'Kaggle',
-                        # "sourceJson":
-                    }
+                    # First try to parse as regular JSON
+                    metadata = json.loads(metadata_content)
 
-                    # Serialize and validate data
-                    ser = InternationalDatasetSerializer(data=result, context={'request': request})
-                    if ser.is_valid():
-                        ser.validated_data['user'] = request.user  # Set user before saving
-                        ser.save()
-                        num_added_records += 1
-                    else:
-                        print(f"Validation error: {ser.errors}")  # Debugging step
+                    # If the result is a string, it might be doubly-encoded
+                    if isinstance(metadata, str):
+                        try:
+                            # Parse the inner JSON
+                            metadata = json.loads(metadata)
+                        except json.JSONDecodeError as inner_error:
+                            # If that fails, try cleaning the inner string
+                            cleaned_inner = metadata.replace('\\"', '"')
+                            metadata = json.loads(cleaned_inner)
+                except json.JSONDecodeError as outer_error:
+                    # If initial parse fails, try cleaning the outer string
+                    try:
+                        cleaned_outer = metadata_content.replace('\\"', '"')
+                        metadata = json.loads(cleaned_outer)
 
-                except Exception as e:
-                    print(f"Error processing dataset {dataset.get('id', 'Unknown')}: {e}")
+                        # Check if we need to parse again
+                        if isinstance(metadata, str):
+                            metadata = json.loads(metadata)
+                    except json.JSONDecodeError:
+                        return Response({
+                            "error": "Failed to parse doubly-encoded metadata",
+                            "content_sample": metadata_content[:200] + "..." if len(
+                                metadata_content) > 200 else metadata_content,
+                            "parsing_steps": [
+                                "1. Tried direct JSON parse",
+                                "2. Tried cleaning outer JSON",
+                                "3. Tried parsing inner JSON"
+                            ]
+                        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+                # Verify we got a dictionary
+            if not isinstance(metadata, dict):
+                return Response({
+                    "error": "Final metadata is not a dictionary",
+                    "metadata_type": str(type(metadata)),
+                    "metadata_content": str(metadata)[:200] + "..." if len(str(metadata)) > 200 else str(metadata)
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            # Get dataset files
+            files = api.dataset_list_files(dataset_ref)
+
+            # Prepare download path
+            hashed_name = hashlib.sha256(f"{dataset_ref}".encode()).hexdigest()[:16]
+            download_path_kaggle = f"downloads/kaggle/{hashed_name}"
+            os.makedirs(default_storage.path(download_path_kaggle), exist_ok=True)
+
+            # Download dataset files
+            api.dataset_download_files(dataset_ref, path=default_storage.path(download_path_kaggle), unzip=True)
+            # Prepare response data with proper defaults
+
+            # Generate container name from dataset ID
+            container_name = hashlib.sha256(str(metadata.get("datasetId")).encode()).hexdigest()[:16]
+
+            # Create container in cloud storage
+            container_url = f'{STORAGE_BASE_URL}{container_name}'
+            headers = {
+                'X-Auth-Token': AUTH_TOKEN
+            }
+            response = requests.put(container_url, headers=headers, verify=False)
+
+            if response.status_code not in [201, 202]:
+                return Response({
+                    "error": "Failed to create storage container",
+                    "details": response.text
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            # Create temporary directory for download
+            with tempfile.TemporaryDirectory() as temp_dir:
+                # Download dataset files to temp directory
+                api.dataset_download_files(dataset_ref, path=temp_dir, unzip=True)
+
+                # Upload all files to cloud storage
+                file_urls = []
+                for root, _, files in os.walk(temp_dir):
+                    for file_name in files:
+                        file_path = os.path.join(root, file_name)
+
+                        # Read file content
+                        with open(file_path, 'rb') as f:
+                            file_data = f.read()
+
+                        # Upload to cloud storage
+                        file_url = f'{STORAGE_BASE_URL}{container_name}/{file_name}'
+                        headers = {
+                            'X-Auth-Token': AUTH_TOKEN,
+                            'Content-Type': 'application/octet-stream'
+                        }
+                        upload_response = requests.put(file_url, headers=headers, data=file_data)
+
+                        if upload_response.status_code in [201, 202]:
+                            file_urls.append(file_url)
+                        else:
+                            return Response({
+                                "error": f"Failed to upload file {file_name}",
+                                "details": upload_response.text
+                            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            # Prepare response data with cloud storage URLs
+            dataset_details = {
+                "title": metadata.get("title", "No title available"),
+                "datasetId": metadata.get("datasetId"),
+                "datasetSlug": metadata.get("datasetSlug", ""),
+                "description": metadata.get("description", ""),
+                "owner": metadata.get("ownerUser", "Unknown owner"),
+                "usabilityRating": metadata.get("usabilityRating", 0),
+                "totalViews": metadata.get("totalViews", 0),
+                "totalVotes": metadata.get("totalVotes", 0),
+                "totalDownloads": metadata.get("totalDownloads", 0),
+                "files": file_urls,
+                "container_name": container_name,
+                "keywords": ", ".join([keyword for keyword in metadata.get("keywords", [])]),
+                "licenses": ", ".join([lic.get("name", "") for lic in metadata.get("licenses", [])])
+            }
+
+            # Clean up local metadata file if it exists
+            if os.path.exists(metadata_file):
+                os.remove(metadata_file)
+            if os.path.exists(kaggle_metadata_path):
+                try:
+                    os.rmdir(kaggle_metadata_path)
+                except OSError:
+                    pass  # Directory not empty
+
+            return Response({"dataset": dataset_details}, status=status.HTTP_200_OK)
 
         except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({
+                "error": "Unexpected error",
+                "details": str(e),
+                "type": type(e).__name__
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        return Response({"response": f"{num_added_records} Records Added"}, status=status.HTTP_201_CREATED)
 
 ##################################################
 # PaperWithCode

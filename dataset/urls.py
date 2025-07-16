@@ -36,6 +36,7 @@ urlpatterns = [
     path('HuggingfaceParquetFiles', views.HuggingfaceParquetFilesView.as_view()),
     path('ImportHuggingface', views.ImportHuggingfaceView.as_view()),
     path('BulkImportHuggingface', views.BulkImportHuggingfaceView.as_view()),
+    path('TransferHuggingfaceDataset', views.TransferHuggingfaceDatasetView.as_view()),
 
     # Kaggle
     path('KaggleDatasetsList', views.KaggleDatasetsListView.as_view()),

@@ -83,7 +83,8 @@ DATABASES = {
         "NAME": "datahub",
         "USER": "green_hub",
         "PASSWORD": "M@sterhub@2151",
-        "HOST": "127.0.0.1",
+        "HOST": "datahub_db",
+        #"HOST": "127.0.0.1",
         "PORT": "5432"
     }
 }

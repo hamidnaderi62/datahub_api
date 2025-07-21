@@ -28,7 +28,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'rest_framework',
-    'rest_framework.authtoken',
+    #'rest_framework.authtoken',
     'drf_spectacular',
 
     'taggit',
@@ -81,8 +81,8 @@ DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
         "NAME": "datahub",
-        "USER": "postgres",
-        "PASSWORD": "123456",
+        "USER": "green_hub",
+        "PASSWORD": "M@sterhub@2151",
         "HOST": "127.0.0.1",
         "PORT": "5432"
     }

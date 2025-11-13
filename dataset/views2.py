@@ -19,6 +19,7 @@ from rest_framework.pagination import PageNumberPagination, LimitOffsetPaginatio
 from rest_framework.parsers import MultiPartParser
 from apscheduler.schedulers.background import BackgroundScheduler
 from django.conf import settings
+import kaggle
 import json
 import os
 from django.core.files.base import ContentFile
@@ -34,6 +35,7 @@ import io
 import boto3
 from botocore.client import Config
 from botocore.exceptions import ClientError
+
 
 ##################################################
 # S3-Compatible Storage Configuration
@@ -939,52 +941,12 @@ class TransferHuggingfaceDatasetView(APIView):
 
 
 ##################################################
-# Kaggle - S3 Compatible (Updated with Lazy Imports)
+# Kaggle - S3 Compatible
 ##################################################
 
-# Kaggle Helper Functions (Add these at the top of your views.py, before the class definitions)
-def get_kaggle_api():
-    """
-    Lazy import Kaggle API to avoid automatic authentication on import
-    """
-    try:
-        from kaggle.api.kaggle_api_extended import KaggleApi
-        api = KaggleApi()
-        api.authenticate()  # This will use environment variables
-        return api
-    except Exception as e:
-        print(f"Kaggle API initialization failed: {e}")
-        return None
-
-
-def is_kaggle_available():
-    """
-    Check if Kaggle API is available and configured
-    """
-    from django.conf import settings
-    return settings.KAGGLE_CONFIGURED
-
-
-def validate_kaggle_credentials():
-    """
-    Validate Kaggle credentials and return detailed status
-    """
-    from django.conf import settings
-    if not settings.KAGGLE_CONFIGURED:
-        return False, "Kaggle credentials not configured"
-
-    api = get_kaggle_api()
-    if api is None:
-        return False, "Failed to initialize Kaggle API"
-
-    # Test the credentials by making a simple API call
-    try:
-        # Try to list datasets (limit 1 to avoid heavy API calls)
-        api.dataset_list(page=1, max_size=1)
-        return True, "Kaggle credentials are valid"
-    except Exception as e:
-        return False, f"Kaggle credentials validation failed: {str(e)}"
-
+##################################################
+# Kaggle - S3 Compatible (Updated with Environment Variables)
+##################################################
 
 class KaggleDatasetDetailView(APIView):
     def get(self, request):
@@ -997,19 +959,15 @@ class KaggleDatasetDetailView(APIView):
 
         try:
             # Check Kaggle credentials from environment variables
-            if not is_kaggle_available():
+            if not settings.KAGGLE_CONFIGURED:
                 return Response({
                     "error": "Kaggle credentials not configured",
                     "message": "Set KAGGLE_USERNAME and KAGGLE_KEY environment variables"
                 }, status=status.HTTP_400_BAD_REQUEST)
 
-            # Initialize and authenticate Kaggle API using lazy import
-            api = get_kaggle_api()
-            if api is None:
-                return Response({
-                    "error": "Failed to initialize Kaggle API",
-                    "message": "Check your Kaggle credentials"
-                }, status=status.HTTP_400_BAD_REQUEST)
+            # Initialize and authenticate Kaggle API using environment variables
+            api = kaggle.KaggleApi()
+            api.authenticate()  # This will automatically use KAGGLE_USERNAME and KAGGLE_KEY env vars
 
             # Create temp directory for metadata
             os.makedirs(kaggle_temp_path, exist_ok=True)
@@ -1088,31 +1046,19 @@ class KaggleDatasetDetailView(APIView):
 class KaggleDatasetsListView(APIView):
     def get(self, request):
         try:
-            page = request.GET.get('page', 1)
-            search = request.GET.get('search')
-            sort_by = request.GET.get('sort_by', 'hottest')
+            page = request.GET.get('page')
 
             # Check if Kaggle is configured
-            if not is_kaggle_available():
+            if not settings.KAGGLE_CONFIGURED:
                 return Response({
                     "error": "Kaggle credentials not configured",
                     "message": "Set KAGGLE_USERNAME and KAGGLE_KEY environment variables"
                 }, status=status.HTTP_400_BAD_REQUEST)
 
-            # Authenticate using lazy import
-            api = get_kaggle_api()
-            if api is None:
-                return Response({
-                    "error": "Failed to initialize Kaggle API",
-                    "message": "Check your Kaggle credentials"
-                }, status=status.HTTP_400_BAD_REQUEST)
+            # Authenticate using environment variables
+            kaggle.api.authenticate()
 
-            # Get datasets with optional search and sorting
-            if search:
-                datasets = api.dataset_list(search=search, page=int(page), sort_by=sort_by)
-            else:
-                datasets = api.dataset_list(page=int(page), sort_by=sort_by)
-
+            datasets = kaggle.api.dataset_list(page=int(page))
             dataset_details = []
 
             for dataset in datasets:
@@ -1122,54 +1068,35 @@ class KaggleDatasetsListView(APIView):
                     "title": dataset.title if hasattr(dataset, 'title') else None,
                     "subtitle": dataset.subtitle if hasattr(dataset, 'subtitle') else None,
                     "url": dataset.url if hasattr(dataset, 'url') else None,
-                    "size": getattr(dataset, 'size', None),
-                    "downloads": getattr(dataset, 'totalDownloads', None),
-                    "votes": getattr(dataset, 'totalVotes', None),
-                    "usability": getattr(dataset, 'usabilityRating', None),
                     "tags": [tag.name for tag in dataset.tags] if hasattr(dataset, 'tags') else [],
                 }
                 dataset_details.append(details)
 
-            return Response({
-                "datasets": dataset_details,
-                "page": int(page),
-                "search": search,
-                "sort_by": sort_by,
-                "total_count": len(dataset_details)
-            }, status=status.HTTP_200_OK)
+            return Response({"datasets": dataset_details}, status=status.HTTP_200_OK)
 
         except Exception as e:
-            return Response({
-                "error": "Failed to fetch Kaggle datasets",
-                "details": str(e)
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class BulkImportKaggleView(APIView):
     permission_classes = [IsAuthenticated, BlocklistPermission]
 
     def get(self, request):
-        page = request.GET.get('page', 1)
-        max_datasets = request.GET.get('max_datasets', 10)
+        page = request.GET.get('page')
         num_added_records = 0
 
         try:
             # Check if Kaggle is configured
-            if not is_kaggle_available():
+            if not settings.KAGGLE_CONFIGURED:
                 return Response({
                     "error": "Kaggle credentials not configured",
                     "message": "Set KAGGLE_USERNAME and KAGGLE_KEY environment variables"
                 }, status=status.HTTP_400_BAD_REQUEST)
 
-            # Authenticate using lazy import
-            api = get_kaggle_api()
-            if api is None:
-                return Response({
-                    "error": "Failed to initialize Kaggle API",
-                    "message": "Check your Kaggle credentials"
-                }, status=status.HTTP_400_BAD_REQUEST)
+            # Authenticate using environment variables
+            kaggle.api.authenticate()
 
-            datasets = api.dataset_list(page=int(page), max_size=int(max_datasets))
+            datasets = kaggle.api.dataset_list(page=int(page))
 
             for dataset in datasets:
                 try:
@@ -1178,9 +1105,6 @@ class BulkImportKaggleView(APIView):
                         "internalId": dataset.id if hasattr(dataset, 'id') else None,
                         "internalCode": dataset.ref if hasattr(dataset, 'ref') else None,
                         "dataset_tags": ', '.join([tag.name for tag in dataset.tags]),
-                        "size": getattr(dataset, 'size', None),
-                        "downloads": getattr(dataset, 'totalDownloads', 0),
-                        "votes": getattr(dataset, 'totalVotes', 0),
                         "referenceOwner": 'Kaggle',
                     }
 
@@ -1189,24 +1113,16 @@ class BulkImportKaggleView(APIView):
                         ser.validated_data['user'] = request.user
                         ser.save()
                         num_added_records += 1
-                        print(f"✅ Imported dataset: {dataset.title}")
                     else:
-                        print(f"❌ Validation error for {dataset.title}: {ser.errors}")
+                        print(f"Validation error: {ser.errors}")
 
                 except Exception as e:
-                    print(f"❌ Error processing dataset {dataset.title}: {e}")
-
-            return Response({
-                "response": f"{num_added_records} Records Added",
-                "page": page,
-                "max_datasets": max_datasets
-            }, status=status.HTTP_201_CREATED)
+                    print(f"Error processing dataset: {e}")
 
         except Exception as e:
-            return Response({
-                "error": "Bulk import failed",
-                "details": str(e)
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response({"response": f"{num_added_records} Records Added"}, status=status.HTTP_201_CREATED)
 
 
 class TransferKaggleDatasetView(APIView):
@@ -1217,18 +1133,14 @@ class TransferKaggleDatasetView(APIView):
 
         try:
             # Check if Kaggle is configured
-            if not is_kaggle_available():
+            if not settings.KAGGLE_CONFIGURED:
                 return {
                            "error": "Kaggle credentials not configured",
                            "message": "Set KAGGLE_USERNAME and KAGGLE_KEY environment variables"
                        }, status.HTTP_400_BAD_REQUEST
 
-            api = get_kaggle_api()
-            if api is None:
-                return {
-                           "error": "Failed to initialize Kaggle API",
-                           "message": "Check your Kaggle credentials"
-                       }, status.HTTP_400_BAD_REQUEST
+            api = kaggle.KaggleApi()
+            api.authenticate()  # Uses environment variables automatically
 
             # Get dataset metadata
             kaggle_temp_path = "./temp/kaggle/"
@@ -1284,7 +1196,7 @@ class TransferKaggleDatasetView(APIView):
             ref_link = f'https://www.kaggle.com/datasets/{dataset_ref}'
 
             with tempfile.TemporaryDirectory() as temp_dir:
-                print(f"📥 Downloading dataset to: {temp_dir}")
+                print(f"Downloading dataset to: {temp_dir}")
                 api.dataset_download_files(dataset_ref, path=temp_dir, unzip=True)
 
                 for root, _, files_list in os.walk(temp_dir):
@@ -1292,7 +1204,7 @@ class TransferKaggleDatasetView(APIView):
                         file_path = os.path.join(root, file_name)
                         file_size = os.path.getsize(file_path)
 
-                        print(f"🔄 Processing file: {file_name} ({sizeof_fmt(file_size)})")
+                        print(f"Processing file: {file_name} ({file_size} bytes)")
 
                         # Use the new fallback upload method
                         upload_success, upload_info = upload_with_fallback(
@@ -1310,7 +1222,7 @@ class TransferKaggleDatasetView(APIView):
                             }
                             download_links.append(download_link)
                             total_file_size += upload_info["size"]
-                            print(f"✅ Successfully uploaded: {file_name}")
+                            print(f"Successfully uploaded: {file_name}")
                         else:
                             return {
                                        "error": f"Failed to upload file {file_name}",
@@ -1347,7 +1259,7 @@ class TransferKaggleDatasetView(APIView):
                 try:
                     self.save_to_databases(dataset_ref, dataset_details, 'Kaggle')
                 except Exception as e:
-                    print(f"⚠️ Error saving to database: {str(e)}")
+                    print(f"Error saving to database: {str(e)}")
 
                 return dataset_details, status.HTTP_200_OK
 
@@ -1427,11 +1339,10 @@ class TransferKaggleDatasetView(APIView):
                 dataset.international_dataset = international_dataset
                 dataset.save()
 
-            print(f"💾 Saved dataset to database: {dataset_data.get('title', '')}")
             return international_dataset, dataset
 
         except Exception as e:
-            print(f"❌ Error saving to databases: {str(e)}")
+            print(f"Error saving to databases: {str(e)}")
             raise
 
     def get(self, request):
@@ -1450,21 +1361,6 @@ class TransferKaggleDatasetView(APIView):
                 "details": str(e)
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-    def post(self, request):
-        """Handle POST requests for transferring datasets"""
-        dataset_ref = request.data.get('dataset_ref')
-        if not dataset_ref:
-            return Response({"error": "dataset_ref parameter is required"}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            dataset_details, status_code = self.upload_storage_kaggle(dataset_ref)
-            return Response(dataset_details, status=status_code)
-        except Exception as e:
-            return Response({
-                "error": "Unexpected error",
-                "details": str(e)
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
 
 class UploadStorageKaggleView(APIView):
     def get(self, request):
@@ -1477,19 +1373,15 @@ class UploadStorageKaggleView(APIView):
 
         try:
             # Check Kaggle credentials from environment variables
-            if not is_kaggle_available():
+            if not settings.KAGGLE_CONFIGURED:
                 return Response({
                     "error": "Kaggle credentials not configured",
                     "message": "Set KAGGLE_USERNAME and KAGGLE_KEY environment variables"
                 }, status=status.HTTP_400_BAD_REQUEST)
 
-            # Initialize and authenticate Kaggle API using lazy import
-            api = get_kaggle_api()
-            if api is None:
-                return Response({
-                    "error": "Failed to initialize Kaggle API",
-                    "message": "Check your Kaggle credentials"
-                }, status=status.HTTP_400_BAD_REQUEST)
+            # Initialize and authenticate Kaggle API using environment variables
+            api = kaggle.KaggleApi()
+            api.authenticate()  # This will automatically use environment variables
 
             # Create temp directory for metadata
             os.makedirs(kaggle_temp_path, exist_ok=True)
@@ -1622,25 +1514,6 @@ class UploadStorageKaggleView(APIView):
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-class KaggleStatusView(APIView):
-    """Check Kaggle API status and credentials"""
-
-    def get(self, request):
-        try:
-            is_available, message = validate_kaggle_credentials()
-            return Response({
-                "kaggle_configured": is_kaggle_available(),
-                "api_available": is_available,
-                "message": message,
-                "environment_variables_set": bool(os.environ.get('KAGGLE_USERNAME') and os.environ.get('KAGGLE_KEY'))
-            }, status=status.HTTP_200_OK)
-        except Exception as e:
-            return Response({
-                "kaggle_configured": False,
-                "api_available": False,
-                "message": f"Error checking status: {str(e)}",
-                "environment_variables_set": False
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 ##################################################
 # PaperWithCode
 ##################################################

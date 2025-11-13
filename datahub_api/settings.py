@@ -79,6 +79,7 @@ WSGI_APPLICATION = 'datahub_api.wsgi.application'
 
 
 # local
+'''
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
@@ -90,9 +91,10 @@ DATABASES = {
     }
 }
 
+'''
+
 
 # server
-'''
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
@@ -103,7 +105,6 @@ DATABASES = {
         "PORT": os.environ.get('DB_PORT', '5432')
     }
 }
-'''
 
 
 # Password validation

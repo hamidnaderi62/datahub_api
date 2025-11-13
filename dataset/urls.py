@@ -1,62 +1,55 @@
-from django.urls import path
-from . import views
-from rest_framework.authtoken import views as token_views
-from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
-
-#ViewSet
+from django.urls import path, include
 from rest_framework.routers import DefaultRouter
+from . import views
+
+# Create a router and register our viewsets with it.
+router = DefaultRouter()
+# router.register(r'datasets', views.DatasetViewSet)
 
 urlpatterns = [
-    path('users', views.UsersListView.as_view()),
-    path('users_detail', views.UsersListDetailView.as_view()),
-    path('users_fulldetail', views.UsersListFullDetailView.as_view()),
-    path('users/add', views.AddUserView.as_view()),
+    path('', include(router.urls)),
 
-    path('datasets', views.DatasetsListView.as_view()),
-    path('datasets/<int:pk>', views.DatasetDetailView.as_view()),
-    path('datasets/sample', views.DatasetSampleView.as_view()),
-    path('datasets/add', views.AddDatasetView.as_view()),
-    path('datasets/update/<int:pk>', views.UpdateDatasetView.as_view()),
-    path('datasets/delete/<int:pk>', views.DeleteDatasetView.as_view()),
-    path('datasets/search', views.SearchDatasetView.as_view()),
-    path('datasets/checktoken', views.CheckToken.as_view()),
+    # Kaggle endpoints
+    path('TransferKaggleDataset', views.TransferKaggleDatasetView.as_view(), name='transfer_kaggle_dataset'),
+    path('KaggleDatasetDetail', views.KaggleDatasetDetailView.as_view(), name='kaggle_dataset_detail'),
+    path('KaggleDatasetsList', views.KaggleDatasetsListView.as_view(), name='kaggle_datasets_list'),
+    path('BulkImportKaggle', views.BulkImportKaggleView.as_view(), name='bulk_import_kaggle'),
+    path('UploadStorageKaggle', views.UploadStorageKaggleView.as_view(), name='upload_storage_kaggle'),
 
-    # DownloadScheduler
-    path('DatasetDownloadScheduler', views.DownloadSchedulerView.as_view()),
+    # HuggingFace endpoints
+    path('TransferHuggingfaceDataset', views.TransferHuggingfaceDatasetView.as_view(),
+         name='transfer_huggingface_dataset'),
+    path('HuggingfaceDatasetDetail', views.HuggingfaceDatasetDetailView.as_view(), name='huggingface_dataset_detail'),
+    path('HuggingfaceDatasetsList', views.HuggingfaceDatasetsListView.as_view(), name='huggingface_datasets_list'),
+    path('BulkImportHuggingface', views.BulkImportHuggingfaceView.as_view(), name='bulk_import_huggingface'),
+    path('ImportHuggingface', views.ImportHuggingfaceView.as_view(), name='import_huggingface'),
+    path('HuggingfaceParquetFiles', views.HuggingfaceParquetFilesView.as_view(), name='huggingface_parquet_files'),
 
-    # DataConvertor
-    path('convertToParquet', views.DataConvertorView.as_view()),
+    # Other data sources
+    path('PaperWithCodeDatasetsList', views.PaperWithCodeDatasetsListView.as_view(),
+         name='paperwithcode_datasets_list'),
 
-    # GenerateMetaData
-    path('GenerateMetaData', views.GenerateMetaData.as_view()),
+    # User management
+    path('UsersList', views.UsersListView.as_view(), name='users_list'),
+    path('UsersListDetail', views.UsersListDetailView.as_view(), name='users_list_detail'),
+    path('UsersListFullDetail', views.UsersListFullDetailView.as_view(), name='users_list_full_detail'),
+    path('AddUser', views.AddUserView.as_view(), name='add_user'),
+    path('CheckToken', views.CheckToken.as_view(), name='check_token'),
 
-    # HuggingFace
-    path('HuggingfaceDatasetsList', views.HuggingfaceDatasetsListView.as_view()),
-    path('HuggingfaceDatasetDetail', views.HuggingfaceDatasetDetailView.as_view()),
-    path('HuggingfaceParquetFiles', views.HuggingfaceParquetFilesView.as_view()),
-    path('ImportHuggingface', views.ImportHuggingfaceView.as_view()),
-    path('BulkImportHuggingface', views.BulkImportHuggingfaceView.as_view()),
-    path('TransferHuggingfaceDataset', views.TransferHuggingfaceDatasetView.as_view()),
+    # Dataset management
+    path('DatasetsList', views.DatasetsListView.as_view(), name='datasets_list'),
+    path('DatasetDetail/<int:pk>', views.DatasetDetailView.as_view(), name='dataset_detail'),
+    path('AddDataset', views.AddDatasetView.as_view(), name='add_dataset'),
+    path('UpdateDataset/<int:pk>', views.UpdateDatasetView.as_view(), name='update_dataset'),
+    path('DeleteDataset/<int:pk>', views.DeleteDatasetView.as_view(), name='delete_dataset'),
+    path('SearchDataset', views.SearchDatasetView.as_view(), name='search_dataset'),
+    path('DatasetSample', views.DatasetSampleView.as_view(), name='dataset_sample'),
 
-    # Kaggle
-    path('KaggleDatasetsList', views.KaggleDatasetsListView.as_view()),
-    path('KaggleDatasetDetail', views.KaggleDatasetDetailView.as_view()),
-    path('UploadStorageKaggle', views.UploadStorageKaggleView.as_view()),
-    path('TransferKaggleDataset', views.TransferKaggleDatasetView.as_view()),
-    path('BulkImportKaggle', views.BulkImportKaggleView.as_view()),
+    # Comments
+    path('CommentsList/<int:pk>', views.CommentsListView.as_view(), name='comments_list'),
 
-
-
-    # PaperWithCode
-    path('PaperWithCodeDatasetsList', views.PaperWithCodeDatasetsListView.as_view()),
-
-    # TokenAuthentication
-    # path('preterms/login', token_views.obtain_auth_token),
-
-    # JWTAuthentication
-    path('login', TokenObtainPairView.as_view(), name='token_obtain_pair'),
-    path('refresh', TokenRefreshView.as_view(), name='token_refresh'),
-
-    path('comments/<int:pk>', views.CommentsListView.as_view()),
+    # Utilities
+    path('DownloadScheduler', views.DownloadSchedulerView.as_view(), name='download_scheduler'),
+    path('DataConvertor', views.DataConvertorView.as_view(), name='data_convertor'),
+    path('GenerateMetaData', views.GenerateMetaData.as_view(), name='generate_metadata'),
 ]
-

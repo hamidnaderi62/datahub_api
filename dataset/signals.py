@@ -38,7 +38,8 @@ def update_or_create_dataset_after_download(sender, instance, **kwargs):
                 "dataType": instance.dataType,
                 "dataset_tags": instance.dataset_tags,
                 "tags": instance.dataset_tags,
-                "created": instance.created
+                "created": instance.created,
+                "price": instance.price
             }
         )
 

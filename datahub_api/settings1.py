@@ -10,12 +10,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/5.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-u=p^-eg)0ui26wiai9w6*frkg9+5o33v(mhx7bmar8fnq&7emu')
+SECRET_KEY = 'django-insecure-u=p^-eg)0ui26wiai9w6*frkg9+5o33v(mhx7bmar8fnq&7emu'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.environ.get('DEBUG', 'True').lower() == 'true'
+DEBUG = True
 
-ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '*').split(',')
+ALLOWED_HOSTS = []
 
 
 # Application definition
@@ -77,8 +77,8 @@ WSGI_APPLICATION = 'datahub_api.wsgi.application'
 #    }
 #}
 
-
 # local
+'''
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
@@ -89,21 +89,19 @@ DATABASES = {
         "PORT": "5432"
     }
 }
-
+'''
 
 # server
-'''
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": os.environ.get('DB_NAME', 'datahub'),
-        "USER": os.environ.get('DB_USER', 'green_hub'),
-        "PASSWORD": os.environ.get('DB_PASSWORD', 'M@sterhub@2151'),
-        "HOST": os.environ.get('DB_HOST', 'datahub_db'),
-        "PORT": os.environ.get('DB_PORT', '5432')
+        "NAME": "datahub",
+        "USER": "green_hub",
+        "PASSWORD": "M@sterhub@2151",
+        "HOST": "datahub_db",
+        "PORT": "5432"
     }
 }
-'''
 
 
 # Password validation
@@ -143,7 +141,6 @@ USE_TZ = True
 STATIC_URL = 'static/'
 MEDIA_URL = 'media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
-
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.0/ref/settings/#default-auto-field
 
@@ -184,21 +181,10 @@ STORAGES = {
     },
 }
 
-# Cloud Storage Configuration
+
 CLOUD_STORAGE_CONFIG = {
-    'S3_ENDPOINT': os.environ.get('S3_ENDPOINT', 'https://teh-1.s3.poshtiban.com'),
-    'ACCESS_KEY': os.environ.get('S3_ACCESS_KEY', '008CA13MP30OHQR2IX5E'),
-    'SECRET_KEY': os.environ.get('S3_SECRET_KEY', 'nBLO5dRnuBPVGZLcbuhsWkgsQRHrHKRVe9TLS89X'),
-    'REGION': os.environ.get('S3_REGION', 'us-east-1'),
+    'S3_ENDPOINT': 'https://teh-1.s3.poshtiban.com',  # or your S3 endpoint
+    'ACCESS_KEY': '008CA13MP30OHQR2IX5E',
+    'SECRET_KEY': 'nBLO5dRnuBPVGZLcbuhsWkgsQRHrHKRVe9TLS89X',
+    'REGION': 'us-east-1',  # or your region
 }
-
-# Kaggle Configuration
-KAGGLE_USERNAME = os.environ.get('KAGGLE_USERNAME', 'datahub2025')
-KAGGLE_KEY = os.environ.get('KAGGLE_KEY', '74d9be44bc9b71717a5ddb97f6e6b939')
-KAGGLE_CONFIGURED = bool(KAGGLE_USERNAME and KAGGLE_KEY)
-
-# Log Kaggle configuration status
-if KAGGLE_CONFIGURED:
-    print("Kaggle credentials configured via environment variables")
-else:
-    print("Kaggle credentials not configured - Kaggle features will be disabled")

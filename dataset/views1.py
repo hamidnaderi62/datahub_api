@@ -944,10 +944,6 @@ class TransferHuggingfaceDatasetView(APIView):
 # Kaggle - S3 Compatible
 ##################################################
 
-##################################################
-# Kaggle - S3 Compatible (Updated with Environment Variables)
-##################################################
-
 class KaggleDatasetDetailView(APIView):
     def get(self, request):
         kaggle_temp_path = "./temp/kaggle/"
@@ -958,16 +954,22 @@ class KaggleDatasetDetailView(APIView):
                             status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            # Check Kaggle credentials from environment variables
-            if not settings.KAGGLE_CONFIGURED:
-                return Response({
-                    "error": "Kaggle credentials not configured",
-                    "message": "Set KAGGLE_USERNAME and KAGGLE_KEY environment variables"
-                }, status=status.HTTP_400_BAD_REQUEST)
+            # Check and load Kaggle credentials
+            kaggle_config_path = 'config/kaggle.json'
+            if not os.path.exists(kaggle_config_path):
+                return Response({"error": "Kaggle credentials file not found"},
+                                status=status.HTTP_400_BAD_REQUEST)
 
-            # Initialize and authenticate Kaggle API using environment variables
+            with open(kaggle_config_path) as f:
+                kaggle_auth = json.load(f)
+
+            # Set Kaggle API credentials
+            os.environ['KAGGLE_USERNAME'] = kaggle_auth.get('username', '')
+            os.environ['KAGGLE_KEY'] = kaggle_auth.get('key', '')
+
+            # Initialize and authenticate Kaggle API
             api = kaggle.KaggleApi()
-            api.authenticate()  # This will automatically use KAGGLE_USERNAME and KAGGLE_KEY env vars
+            api.authenticate()
 
             # Create temp directory for metadata
             os.makedirs(kaggle_temp_path, exist_ok=True)
@@ -1047,15 +1049,16 @@ class KaggleDatasetsListView(APIView):
     def get(self, request):
         try:
             page = request.GET.get('page')
+            kaggle_config_path = 'config/kaggle.json'
+            if not os.path.exists(kaggle_config_path):
+                return Response({"error": "Kaggle credentials file not found"}, status=status.HTTP_400_BAD_REQUEST)
 
-            # Check if Kaggle is configured
-            if not settings.KAGGLE_CONFIGURED:
-                return Response({
-                    "error": "Kaggle credentials not configured",
-                    "message": "Set KAGGLE_USERNAME and KAGGLE_KEY environment variables"
-                }, status=status.HTTP_400_BAD_REQUEST)
+            with open(kaggle_config_path) as f:
+                kaggle_auth = json.load(f)
 
-            # Authenticate using environment variables
+            os.environ['KAGGLE_USERNAME'] = kaggle_auth.get('username', '')
+            os.environ['KAGGLE_KEY'] = kaggle_auth.get('key', '')
+
             kaggle.api.authenticate()
 
             datasets = kaggle.api.dataset_list(page=int(page))
@@ -1084,16 +1087,17 @@ class BulkImportKaggleView(APIView):
     def get(self, request):
         page = request.GET.get('page')
         num_added_records = 0
-
         try:
-            # Check if Kaggle is configured
-            if not settings.KAGGLE_CONFIGURED:
-                return Response({
-                    "error": "Kaggle credentials not configured",
-                    "message": "Set KAGGLE_USERNAME and KAGGLE_KEY environment variables"
-                }, status=status.HTTP_400_BAD_REQUEST)
+            kaggle_config_path = 'config/kaggle.json'
+            if not os.path.exists(kaggle_config_path):
+                return Response({"error": "Kaggle credentials file not found"}, status=status.HTTP_400_BAD_REQUEST)
 
-            # Authenticate using environment variables
+            with open(kaggle_config_path) as f:
+                kaggle_auth = json.load(f)
+
+            os.environ['KAGGLE_USERNAME'] = kaggle_auth.get('username', '')
+            os.environ['KAGGLE_KEY'] = kaggle_auth.get('key', '')
+
             kaggle.api.authenticate()
 
             datasets = kaggle.api.dataset_list(page=int(page))
@@ -1132,15 +1136,19 @@ class TransferKaggleDatasetView(APIView):
             return {"error": "dataset_ref parameter is required"}, status.HTTP_400_BAD_REQUEST
 
         try:
-            # Check if Kaggle is configured
-            if not settings.KAGGLE_CONFIGURED:
-                return {
-                           "error": "Kaggle credentials not configured",
-                           "message": "Set KAGGLE_USERNAME and KAGGLE_KEY environment variables"
-                       }, status.HTTP_400_BAD_REQUEST
+            # Load Kaggle credentials
+            kaggle_config_path = 'config/kaggle.json'
+            if not os.path.exists(kaggle_config_path):
+                return {"error": "Kaggle credentials file not found"}, status.HTTP_400_BAD_REQUEST
+
+            with open(kaggle_config_path) as f:
+                kaggle_auth = json.load(f)
+
+            os.environ['KAGGLE_USERNAME'] = kaggle_auth.get('username', '')
+            os.environ['KAGGLE_KEY'] = kaggle_auth.get('key', '')
 
             api = kaggle.KaggleApi()
-            api.authenticate()  # Uses environment variables automatically
+            api.authenticate()
 
             # Get dataset metadata
             kaggle_temp_path = "./temp/kaggle/"
@@ -1372,16 +1380,22 @@ class UploadStorageKaggleView(APIView):
                             status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            # Check Kaggle credentials from environment variables
-            if not settings.KAGGLE_CONFIGURED:
-                return Response({
-                    "error": "Kaggle credentials not configured",
-                    "message": "Set KAGGLE_USERNAME and KAGGLE_KEY environment variables"
-                }, status=status.HTTP_400_BAD_REQUEST)
+            # Check and load Kaggle credentials
+            kaggle_config_path = 'config/kaggle.json'
+            if not os.path.exists(kaggle_config_path):
+                return Response({"error": "Kaggle credentials file not found"},
+                                status=status.HTTP_400_BAD_REQUEST)
 
-            # Initialize and authenticate Kaggle API using environment variables
+            with open(kaggle_config_path) as f:
+                kaggle_auth = json.load(f)
+
+            # Set Kaggle API credentials
+            os.environ['KAGGLE_USERNAME'] = kaggle_auth.get('username', '')
+            os.environ['KAGGLE_KEY'] = kaggle_auth.get('key', '')
+
+            # Initialize and authenticate Kaggle API
             api = kaggle.KaggleApi()
-            api.authenticate()  # This will automatically use environment variables
+            api.authenticate()
 
             # Create temp directory for metadata
             os.makedirs(kaggle_temp_path, exist_ok=True)
